@@ -1,0 +1,1781 @@
+---
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '@fontsource/big-shoulders-display/700';
+import '@fontsource/big-shoulders-display/800';
+import '@fontsource/big-shoulders-display/900';
+import '@fontsource/geist/400.css';
+import '@fontsource/geist/400-italic.css';
+import '@fontsource/geist/500.css';
+import '@fontsource/geist/600.css';
+import '@fontsource/geist-mono/400.css';
+import '@fontsource/geist-mono/500.css';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import rough from 'roughjs';
+import { geoMercator, geoPath } from 'd3-geo';
+import { scaleLinear, scaleThreshold } from 'd3-scale';
+import { quantile, extent, ticks } from 'd3-array';
+import { line as d3line, curveLinear } from 'd3-shape';
+
+// ===== Shared page helpers: formatting =====
+// Number and text formatters shared by build-time components and the Atlas.
+function fmt(v: number | null | undefined, decimals = 0): string {
+    if (v == null || Number.isNaN(v))
+        return 'no data';
+    return v.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+/** Signed value: +1.2, -0.4, 0. Uses a true minus sign. */
+function signed(v: number | null | undefined, decimals = 0): string {
+    if (v == null || Number.isNaN(v))
+        return 'no data';
+    const s = fmt(Math.abs(v), decimals);
+    if (Number(s.replace(/,/g, '')) === 0)
+        return s;
+    return (v > 0 ? '+' : '−') + s;
+}
+function withUnit(v: number | null | undefined, unit: string, decimals = 0): string {
+    if (v == null)
+        return 'no data';
+    const n = fmt(v, decimals);
+    if (!unit)
+        return n;
+    if (unit === '%')
+        return `${n}%`;
+    if (unit === 'SPI')
+        return n;
+    return `${n} ${unit}`;
+}
+function ordinal(n: number): string {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+/** "19.44° N  76.00° E" */
+function coords(lon: number, lat: number): string {
+    return `${Math.abs(lat).toFixed(2)}° ${lat >= 0 ? 'N' : 'S'}  ${Math.abs(lon).toFixed(2)}° ${lon >= 0 ? 'E' : 'W'}`;
+}
+/** "19 NOV 2026" from an ISO date. */
+function stampDate(iso: string): string {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).toUpperCase();
+}
+/** Remove em dashes from text we did not write (README titles etc.). */
+function noEmDash(s: string): string {
+    return s.replace(/\s*—\s*/g, ': ').replace(/:\s*:/g, ':');
+}
+
+
+// ===== Shared page helpers: deterministic seeds =====
+// Fixed, seeded "randomness" so every tilt and wobble is identical on every load.
+/** 32-bit FNV-1a hash of a string. */
+function hash(s: string): number {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+}
+/** Deterministic PRNG (mulberry32). */
+function rng(seed: number | string) {
+    let a = typeof seed === 'string' ? hash(seed) : seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+/** A fixed tilt in degrees within ±max, from a seed string. Never exactly 0 (0 if max is 0). */
+function tilt(seed: string, max = 3): number {
+    const r = rng(seed)();
+    const v = (r * 2 - 1) * max;
+    const min = max * 0.3;
+    const out = Math.abs(v) < min ? (v < 0 ? -min : min) : v;
+    return Math.round(out * 10) / 10;
+}
+
+
+// ===== Shared page helpers: site URLs =====
+// Every internal URL goes through u(), so the site works at a sub-path
+// (GitHub Pages: /bharatnomy-website/) or at a domain root, set by BASE_PATH.
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+const u = (p: string): string => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE + (p.startsWith('/') ? p : `/${p}`));
+const base = BASE;
+
+
+// ===== Shared page helpers: data colour scales =====
+const STOPS = {
+    warm: ['#F6EBD3', '#F0C46E', '#E07E3C', '#B53D2C', '#6B1F1D'],
+    anomaly: ['#2F5D9A', '#9DB7D5', '#EEEDE6', '#E5A07C', '#A8322A'],
+    wet: ['#EEF2E6', '#BCD9C6', '#6FB0AC', '#2C7C92', '#173F5C'],
+    wetdry: ['#8A5626', '#D6A86E', '#EEEDE6', '#7FC0B8', '#1E6E73'],
+    // brown half of dry/wet, light to dark, for "longer dry spell = darker"
+    dry: ['#F1EBDD', '#E2CDA6', '#D6A86E', '#B07B42', '#8A5626'],
+    // reversed dry/wet, for changes where a bigger number is drier (longer dry spells)
+    wetdry_rev: ['#1E6E73', '#7FC0B8', '#EEEDE6', '#D6A86E', '#8A5626'],
+    // ordinal monsoon category: large deficient .. large excess
+    category: ['#8A5626', '#D6A86E', '#EEEDE6', '#7FC0B8', '#1E6E73'],
+} as const;
+type ScaleKind = keyof typeof STOPS;
+const NO_DATA = 'url(#nodata)';
+interface Classed {
+    color: (v: number | string | null) => string | null;
+    /** legend entries, light to dark (or dry to wet) */
+    legend: {
+        color: string;
+        label: string;
+        from?: number;
+        to?: number;
+    }[];
+    breaks: number[];
+}
+const nice = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
+/** Pretty step for symmetric diverging breaks. */
+function niceStep(maxAbs: number): number {
+    const raw = maxAbs / 2.5;
+    const p = 10 ** Math.floor(Math.log10(raw));
+    const m = raw / p;
+    return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+}
+/**
+ * Build a 5-class scale.
+ * - quantile / equal: sequential metrics (values = every value currently shown)
+ * - diverging-symmetric: breaks at ±step/2 and ±1.5 step around zero
+ * - fixed: metric.fixed breaks (SPI), mapped to 5 colours
+ * - categorical: metric.categories in order
+ */
+function classify(opts: {
+    kind: ScaleKind;
+    breaks: string;
+    values: number[];
+    method?: 'quantile' | 'equal';
+    decimals?: number;
+    unit?: string;
+    fixed?: number[];
+    categories?: string[];
+}): Classed {
+    const stops = [...STOPS[opts.kind]];
+    const d = opts.decimals ?? 0;
+    const u = opts.unit === '%' ? '%' : opts.unit && opts.unit !== 'SPI' ? ` ${opts.unit}` : '';
+    if (opts.breaks === 'categorical') {
+        const cats = opts.categories ?? [];
+        const map = new Map(cats.map((c, i) => [c, stops[i]]));
+        return {
+            color: (v) => (v == null ? null : map.get(String(v)) ?? null),
+            legend: cats.map((c, i) => ({ color: stops[i], label: c })),
+            breaks: [],
+        };
+    }
+    const vals = opts.values.filter((v) => v != null && !Number.isNaN(v)).sort((a, b) => a - b);
+    let breaks: number[];
+    if (opts.breaks === 'fixed' && opts.fixed) {
+        // SPI: -2,-1.5,-1 | 1,1.5,2 → 5 classes: <=-1.5, -1.5..-1, -1..1, 1..1.5, >=1.5
+        // (the outermost ±2 break is shown in the legend text of the end classes)
+        const f = opts.fixed;
+        breaks = [f[1], f[2], f[3], f[4]];
+        const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+        return {
+            color: (v) => (v == null ? null : s(+v)),
+            legend: [
+                { color: stops[0], label: `below ${f[1]} (severe, extreme below ${f[0]})` },
+                { color: stops[1], label: `${f[1]} to ${f[2]} (moderately dry)` },
+                { color: stops[2], label: `${f[2]} to ${f[3]} (near normal)` },
+                { color: stops[3], label: `${f[3]} to ${f[4]} (moderately wet)` },
+                { color: stops[4], label: `above ${f[4]} (very wet, extreme above ${f[5]})` },
+            ],
+            breaks,
+        };
+    }
+    if (opts.breaks === 'diverging-symmetric') {
+        const maxAbs = Math.max(Math.abs(vals[0] ?? 1), Math.abs(vals[vals.length - 1] ?? 1)) || 1;
+        const step = niceStep(maxAbs);
+        breaks = [-1.5 * step, -0.5 * step, 0.5 * step, 1.5 * step];
+        const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+        const f = (x: number) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(nice(x, 2)).toLocaleString('en-IN');
+        return {
+            color: (v) => (v == null ? null : s(+v)),
+            legend: [
+                { color: stops[0], label: `below ${f(breaks[0])}${u}`, to: breaks[0] },
+                { color: stops[1], label: `${f(breaks[0])} to ${f(breaks[1])}${u}`, from: breaks[0], to: breaks[1] },
+                { color: stops[2], label: `${f(breaks[1])} to ${f(breaks[2])}${u} (near zero)`, from: breaks[1], to: breaks[2] },
+                { color: stops[3], label: `${f(breaks[2])} to ${f(breaks[3])}${u}`, from: breaks[2], to: breaks[3] },
+                { color: stops[4], label: `above ${f(breaks[3])}${u}`, from: breaks[3] },
+            ],
+            breaks,
+        };
+    }
+    // sequential
+    const lo = vals[0] ?? 0, hi = vals[vals.length - 1] ?? 1;
+    if (opts.method === 'equal') {
+        const w = (hi - lo) / 5;
+        breaks = [1, 2, 3, 4].map((i) => nice(lo + w * i, d));
+    }
+    else {
+        breaks = [0.2, 0.4, 0.6, 0.8].map((p) => nice(quantile(vals, p) ?? lo, d));
+    }
+    // collapse duplicate breaks (many equal values) so classes stay ordered
+    for (let i = 1; i < breaks.length; i++)
+        if (breaks[i] <= breaks[i - 1])
+            breaks[i] = breaks[i - 1] + 10 ** -d;
+    const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+    const n = (x: number) => x.toLocaleString('en-IN', { maximumFractionDigits: d, minimumFractionDigits: d });
+    const edges = [lo, ...breaks, hi];
+    return {
+        color: (v) => (v == null ? null : s(+v)),
+        legend: stops.map((c, i) => ({
+            color: c,
+            label: i === 0 ? `under ${n(edges[1])}${u}` : i === 4 ? `${n(edges[4])}${u} or more` : `${n(edges[i])} to under ${n(edges[i + 1])}${u}`,
+            from: edges[i], to: edges[i + 1],
+        })),
+        breaks,
+    };
+}
+/** Darkest usable stop of a scale (for compare lines etc.). */
+const darkEnd = (k: ScaleKind) => STOPS[k][4];
+
+
+// ===== Shared page helpers: hand-drawn SVG sketches =====
+const gen = rough.generator();
+/** Round every number in a path string to 1 decimal (keeps inline SVG small). */
+const tidy = (d: string, dec = 1) => d.replace(/-?\d+\.\d+/g, (n) => (Math.round(+n * 10 ** dec) / 10 ** dec).toString());
+interface Frame {
+    width: number;
+    height: number;
+    project: (p: [
+        number,
+        number
+    ]) => [
+        number,
+        number
+    ];
+}
+function allCoords(g: any, out: Position[] = []): Position[] {
+    if (!g)
+        return out;
+    if (g.type === 'FeatureCollection')
+        g.features.forEach((f: any) => allCoords(f.geometry, out));
+    else if (g.type === 'GeometryCollection')
+        g.geometries.forEach((x: any) => allCoords(x, out));
+    else if (g.type === 'Feature')
+        allCoords(g.geometry, out);
+    else if (g.type === 'Point')
+        out.push(g.coordinates);
+    else if (g.type === 'MultiPoint' || g.type === 'LineString')
+        out.push(...g.coordinates);
+    else if (g.type === 'Polygon' || g.type === 'MultiLineString')
+        g.coordinates.forEach((r: Position[]) => out.push(...r));
+    else if (g.type === 'MultiPolygon')
+        g.coordinates.forEach((p: Position[][]) => p.forEach((r) => out.push(...r)));
+    return out;
+}
+function frameFor(fc: FeatureCollection, width: number, height: number, pad = 12): Frame {
+    // Fit to the coordinates as points: d3-geo is spherical and treats rings with
+    // the "wrong" winding (RFC 7946 order) as the whole globe minus the shape.
+    const proj = geoMercator().fitExtent([[pad, pad], [width - pad, height - pad]], { type: 'MultiPoint', coordinates: allCoords(fc) } as any);
+    return { width, height, project: (p) => proj(p) as [
+            number,
+            number
+        ] };
+}
+function rings(g: Geometry): Position[][] {
+    if (g.type === 'Polygon')
+        return [g.coordinates[0]];
+    if (g.type === 'MultiPolygon')
+        return g.coordinates.map((p) => p[0]);
+    return [];
+}
+interface SketchedDistrict {
+    lgd: string;
+    name: string;
+    x: number;
+    y: number;
+    outline: string[];
+    hatch: string[];
+    plain: string;
+}
+interface SketchOpts {
+    frame: Frame;
+    /** value per lgd; districts without a value get outline only */
+    values?: Record<string, number | null>;
+    /** value range mapped to hachure gap (sparse at lo, dense at hi) */
+    range?: [
+        number,
+        number
+    ];
+    gap?: [
+        number,
+        number
+    ]; // [sparse, dense] px, default [14, 2.5]
+    roughness?: number;
+    seedSalt?: number;
+    hatchWeight?: number;
+}
+function hachureGap(v: number, range: [
+    number,
+    number
+], gap: [
+    number,
+    number
+] = [14, 2.5]): number {
+    const t = Math.max(0, Math.min(1, (v - range[0]) / (range[1] - range[0] || 1)));
+    // interpolate line density (1/gap), not gap, so darkness grows evenly with the value
+    return 1 / (1 / gap[0] + (1 / gap[1] - 1 / gap[0]) * t);
+}
+function sketchDistricts(fc: FeatureCollection, o: SketchOpts): SketchedDistrict[] {
+    const path = geoPath();
+    const out: SketchedDistrict[] = [];
+    for (const f of fc.features as Feature[]) {
+        const p = f.properties as {
+            lgd: string;
+            name: string;
+            cx: number;
+            cy: number;
+        };
+        const seed = Number(p.lgd) + (o.seedSalt ?? 0) * 1000;
+        const polys = rings(f.geometry).map((r) => r.map((c) => o.frame.project(c as [
+            number,
+            number
+        ])));
+        if (polys.some((r) => r.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))))
+            throw new Error(`sketch: non-finite projection for ${p.name}`);
+        const v = o.values?.[p.lgd];
+        const outline: string[] = [];
+        const hatch: string[] = [];
+        polys.forEach((pts, i) => {
+            if (pts.length < 3)
+                return;
+            const s = seed + i * 7;
+            for (const pi of gen.toPaths(gen.polygon(pts, { roughness: o.roughness ?? 0.75, bowing: 0.6, stroke: '#16181C', strokeWidth: 1, seed: s, disableMultiStroke: true })))
+                outline.push(tidy(pi.d));
+            if (v != null && o.range) {
+                const g = gen.polygon(pts, {
+                    stroke: 'none', fill: '#16181C', fillStyle: 'hachure', hachureAngle: -41,
+                    hachureGap: hachureGap(v, o.range, o.gap), fillWeight: o.hatchWeight ?? 0.7,
+                    roughness: 0.4, seed: s + 3, disableMultiStrokeFill: true,
+                });
+                for (const pi of gen.toPaths(g))
+                    if (pi.fill === 'none' || pi.stroke !== 'none')
+                        hatch.push(tidy(pi.d, 0));
+            }
+        });
+        const [x, y] = o.frame.project([p.cx, p.cy]);
+        const plain = tidy(path({ type: 'MultiPolygon', coordinates: polys.map((r) => [r]) } as any) ?? '');
+        out.push({ lgd: String(p.lgd), name: p.name, x, y, outline, hatch, plain });
+    }
+    return out;
+}
+/** Rough outlines of every feature (e.g. India's states), one path string each. */
+function sketchOutlines(fc: FeatureCollection, frame: Frame, o: {
+    roughness?: number;
+    seedSalt?: number;
+} = {}) {
+    return (fc.features as Feature[]).map((f, k) => {
+        const props = (f.properties ?? {}) as Record<string, any>;
+        const d: string[] = [];
+        rings(f.geometry).forEach((r, i) => {
+            const pts = r.map((c) => frame.project(c as [
+                number,
+                number
+            ]));
+            if (pts.length < 3)
+                return;
+            for (const pi of gen.toPaths(gen.polygon(pts, { roughness: o.roughness ?? 0.6, bowing: 0.5, stroke: '#16181C', strokeWidth: 1, seed: 7000 + k * 31 + i + (o.seedSalt ?? 0), disableMultiStroke: true })))
+                d.push(tidy(pi.d));
+        });
+        return { props, d: d.join(' ') };
+    });
+}
+/** A single rough line through points (the "pen line"). */
+function roughLine(points: [
+    number,
+    number
+][], seed: number, roughness = 0.4): string {
+    return gen.toPaths(gen.curve(points, { roughness, bowing: 0.5, stroke: '#2346C7', strokeWidth: 2, seed, disableMultiStroke: true })).map((p) => tidy(p.d)).join(' ');
+}
+/** A rough circle outline, e.g. for waypoints or lens circles. */
+function roughCircle(x: number, y: number, d: number, seed: number, roughness = 0.8): string {
+    return gen.toPaths(gen.circle(x, y, d, { roughness, stroke: '#16181C', strokeWidth: 1, seed })).map((p) => tidy(p.d)).join(' ');
+}
+
+
+// ===== Shared page helpers: trend charts =====
+interface TrendSeries {
+    label: string;
+    values: (number | null)[];
+    /** 'ink' main line, 'accent' pen line, or a dash pattern for compares */
+    style?: 'ink' | 'accent' | 'faint';
+    dash?: string;
+    color?: string;
+}
+interface TrendOpts {
+    years: number[];
+    series: TrendSeries[];
+    width?: number;
+    height?: number;
+    unit?: string;
+    decimals?: number;
+    baseline?: [
+        number,
+        number
+    ]; // shaded normal period
+    highlight?: number; // marked year
+    rolling?: number; // rolling mean window (applied to series[0])
+    zeroLine?: boolean;
+    title?: string; // accessible title
+    desc?: string;
+}
+const escTrend = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+function rollingMean(v: (number | null)[], w: number): (number | null)[] {
+    return v.map((_, i) => {
+        if (i < w - 1)
+            return null;
+        const win = v.slice(i - w + 1, i + 1).filter((x): x is number => x != null);
+        return win.length === w ? win.reduce((a, b) => a + b, 0) / w : null;
+    });
+}
+function renderTrend(o: TrendOpts): string {
+    const W = o.width ?? 560, H = o.height ?? 220;
+    const m = { t: 24, r: 12, b: 26, l: 40 };
+    const years = o.years;
+    const all = o.series.flatMap((s) => s.values).filter((v): v is number => v != null);
+    let [lo, hi] = extent(all) as [
+        number,
+        number
+    ];
+    if (o.zeroLine) {
+        lo = Math.min(lo, 0);
+        hi = Math.max(hi, 0);
+    }
+    const padY = (hi - lo) * 0.08 || 1;
+    const x = scaleLinear().domain([years[0], years[years.length - 1]]).range([m.l, W - m.r]);
+    const y0 = lo >= 0 && lo - padY < 0 ? 0 : lo - padY; // counts never go below zero
+    const y = scaleLinear().domain([y0, hi + padY]).range([H - m.b, m.t]).nice(4);
+    const d = o.decimals ?? 0;
+    const yt = y.ticks(4);
+    const xt = ticks(Math.ceil(years[0] / 10) * 10, Math.floor(years[years.length - 1] / 10) * 10, 8).filter((t) => t % 10 === 0);
+    const mk = (vals: (number | null)[]) => d3line<number | null>().defined((v) => v != null).x((_, i) => x(years[i])).y((v) => y(v as number)).curve(curveLinear)(vals) ?? '';
+    const parts: string[] = [];
+    parts.push(`<svg class="trend" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${escTrend(o.title ?? 'Trend chart')}">`);
+    if (o.desc)
+        parts.push(`<desc>${escTrend(o.desc)}</desc>`);
+    // baseline band
+    if (o.baseline) {
+        const [a, b] = o.baseline;
+        parts.push(`<rect class="trend-band" x="${x(Math.max(a, years[0])).toFixed(1)}" y="${m.t}" width="${(x(Math.min(b, years[years.length - 1])) - x(Math.max(a, years[0]))).toFixed(1)}" height="${H - m.b - m.t}"/>`);
+        parts.push(`<text class="trend-bandlabel" x="${(x(Math.max(a, years[0])) + 4).toFixed(1)}" y="${m.t + 10}">NORMAL ${a}–${b}</text>`);
+    }
+    // y grid + ticks
+    for (const t of yt) {
+        parts.push(`<line class="trend-grid" x1="${m.l}" x2="${W - m.r}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>`);
+        parts.push(`<text class="trend-tick" x="${m.l - 6}" y="${(y(t) + 3).toFixed(1)}" text-anchor="end">${t.toLocaleString('en-IN', { maximumFractionDigits: Math.max(0, d) })}</text>`);
+    }
+    if (o.zeroLine && lo < 0 && hi > 0)
+        parts.push(`<line class="trend-zero" x1="${m.l}" x2="${W - m.r}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>`);
+    // x ticks
+    parts.push(`<line class="trend-axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`);
+    for (const t of xt) {
+        parts.push(`<line class="trend-axis" x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${H - m.b}" y2="${H - m.b + 4}"/>`);
+        parts.push(`<text class="trend-tick" x="${x(t).toFixed(1)}" y="${H - m.b + 15}" text-anchor="middle">${t}</text>`);
+    }
+    if (o.unit)
+        parts.push(`<text class="trend-tick trend-unit" x="0" y="10">${escTrend(o.unit.toUpperCase())}</text>`);
+    // highlight year
+    if (o.highlight != null && years.includes(o.highlight)) {
+        const hx = x(o.highlight).toFixed(1);
+        parts.push(`<line class="trend-hl" x1="${hx}" x2="${hx}" y1="${m.t}" y2="${H - m.b}"/>`);
+        parts.push(`<text class="trend-hllabel" x="${hx}" y="${m.t - 6}" text-anchor="end">${o.highlight}</text>`);
+    }
+    // series
+    o.series.forEach((s, i) => {
+        const cls = s.style === 'accent' ? 'trend-pen' : s.style === 'faint' ? 'trend-faint' : 'trend-ink';
+        const extra = `${s.dash ? ` stroke-dasharray="${s.dash}"` : ''}${s.color ? ` style="stroke:${s.color}"` : ''}`;
+        parts.push(`<path class="${cls}" d="${mk(s.values)}"${extra}><title>${escTrend(s.label)}</title></path>`);
+        if (i === 0 && o.rolling)
+            parts.push(`<path class="trend-roll" d="${mk(rollingMean(s.values, o.rolling))}"><title>${o.rolling}-year rolling mean</title></path>`);
+        if (i === 0 && o.highlight != null) {
+            const k = years.indexOf(o.highlight);
+            const v = s.values[k];
+            if (v != null)
+                parts.push(`<circle class="trend-dot" cx="${x(o.highlight).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.5"/>`);
+        }
+    });
+    parts.push('</svg>');
+    return parts.join('');
+}
+
+
+// ===== Shared page helpers: dataset README formatting =====
+interface Section {
+    title: string;
+    body: string;
+}
+const escMarkdown = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function inline(s: string): string {
+    let t = escMarkdown(noEmDash(s));
+    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) => {
+        const ext = /^https?:/.test(url);
+        return `<a href="${url}"${ext ? ' class="ext"' : ''}>${txt}</a>`;
+    });
+    return t;
+}
+function block(md: string): string {
+    const lines = md.split('\n');
+    const out: string[] = [];
+    let i = 0;
+    while (i < lines.length) {
+        const l = lines[i];
+        if (!l.trim()) {
+            i++;
+            continue;
+        }
+        if (/^\|/.test(l)) {
+            const rows: string[][] = [];
+            while (i < lines.length && /^\|/.test(lines[i])) {
+                if (!/^\|[\s:|-]+\|$/.test(lines[i].trim()))
+                    rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+                i++;
+            }
+            const [head, ...body] = rows;
+            out.push(`<div class="md-table"><table><thead><tr>${head.map((h) => `<th scope="col">${inline(h)}</th>`).join('')}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+            continue;
+        }
+        if (/^[-*] /.test(l)) {
+            const items: string[] = [];
+            while (i < lines.length && (/^[-*] /.test(lines[i]) || /^\s{2,}\S/.test(lines[i]))) {
+                if (/^[-*] /.test(lines[i]))
+                    items.push(lines[i].replace(/^[-*] /, ''));
+                else
+                    items[items.length - 1] += ' ' + lines[i].trim();
+                i++;
+            }
+            out.push(`<ul>${items.map((it) => `<li>${inline(it)}</li>`).join('')}</ul>`);
+            continue;
+        }
+        const para: string[] = [];
+        while (i < lines.length && lines[i].trim() && !/^[|#]|^[-*] /.test(lines[i]))
+            para.push(lines[i++].trim());
+        if (para.length)
+            out.push(`<p>${inline(para.join(' '))}</p>`);
+        else
+            i++;
+    }
+    return out.join('\n');
+}
+/** Split a README into its title, first paragraph and ## sections (raw md). */
+function parseReadme(md: string) {
+    const title = noEmDash((md.match(/^# (.+)$/m)?.[1] ?? '').replace(/\s*—\s*Maharashtra$/, ''));
+    const parts = md.split(/^## /m);
+    const intro = parts[0].replace(/^# .+$/m, '').trim();
+    const sections: Record<string, string> = {};
+    for (const p of parts.slice(1)) {
+        const nl = p.indexOf('\n');
+        sections[p.slice(0, nl).trim()] = p.slice(nl + 1).trim();
+    }
+    return { title, intro, sections };
+}
+/** Rows of the first markdown table in a section. */
+function tableRows(md: string): string[][] {
+    return md.split('\n').filter((l) => /^\|/.test(l) && !/^\|[\s:|-]+\|$/.test(l.trim()))
+        .map((l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())).slice(1);
+}
+/** Bullet items of a section as raw strings. */
+function bullets(md: string): string[] {
+    return md.split('\n').filter((l) => /^[-*] /.test(l)).map((l) => l.replace(/^[-*] /, ''));
+}
+
+
+// ===== Shared page helpers: dataset loading =====
+const DATA_DIR = path.join(process.cwd(), 'public', 'data');
+function read<T>(rel: string): T {
+    const f = path.join(DATA_DIR, rel);
+    if (!fs.existsSync(f))
+        throw new Error(`Missing ${rel}. Run \`npm run data\` first.`);
+    return JSON.parse(fs.readFileSync(f, 'utf8')) as T;
+}
+interface District {
+    lgd: string;
+    name: string;
+    census2011: string;
+    cx: number;
+    cy: number;
+}
+interface MetricFile {
+    metric: string;
+    dataset: string;
+    label: string;
+    unit: string;
+    years: number[];
+    values: Record<string, (number | string | null)[]>;
+    state_mean: (number | null)[] | null;
+    domain: (number | string)[];
+    p05_p95: [
+        number,
+        number
+    ] | null;
+    source: string;
+    updated: string;
+}
+interface DatasetMeta {
+    slug: string;
+    code: string;
+    lens: string;
+    folder: string;
+    path: string;
+    title: string;
+    defaultMetric: string;
+    source: string;
+    sourceUrl: string;
+    rows: number;
+    districts: number;
+    columns: number;
+    first_year: number;
+    last_year: number;
+    csv_kb: number;
+    json_kb: number;
+    metrics: string[];
+}
+interface Stats {
+    district_count: number;
+    temp_first_year: number;
+    temp_last_year: number;
+    temp_year_span: number;
+    rain_first_year: number;
+    rain_last_year: number;
+    decade_first: string;
+    decade_last: string;
+    p90_days_first: number;
+    p90_days_last: number;
+    hottest_change_district: string;
+    hottest_change_district_lgd: string;
+    hottest_change_days: number;
+    districts_warmer_last_decade: number;
+    monsoon_latest_avg_departure_pct: number;
+    monsoon_latest_deficient: number;
+    monsoon_latest_excess: number;
+    state_centroid: [
+        number,
+        number
+    ];
+    states_mapped: string[];
+    india_boundaries: {
+        states_2011: number;
+        commit: string;
+    };
+    data: {
+        repo: string;
+        commit: string;
+        short: string;
+        date: string;
+        built: string;
+    };
+    ticker: {
+        lgd: string | null;
+        year: number;
+        text: string;
+    }[];
+    datasets: DatasetMeta[];
+}
+interface DecadeFrames {
+    metric: string;
+    decades: {
+        label: string;
+        start: number;
+        first: number;
+        last: number;
+        years: number;
+        complete: boolean;
+    }[];
+    values: Record<string, (number | null)[]>;
+}
+let _stats: Stats | undefined;
+const stats = (): Stats => (_stats ??= read<Stats>('stats.json'));
+const districts = (): District[] => read<District[]>('districts.json');
+const districtsGeo = (): GeoJSON.FeatureCollection => read('districts.geojson');
+const stateGeo = (): GeoJSON.FeatureCollection => read('state.geojson');
+const indiaGeo = (): GeoJSON.FeatureCollection => read('india-states.geojson');
+const metricFile = (dataset: string, metric: string): MetricFile => read(`${dataset}/${metric}.json`);
+const decadeFrames = (): DecadeFrames => read('temperature/decades_days_tmax_above_p90.json');
+const readme = (dataset: string): string => fs.readFileSync(path.join(DATA_DIR, dataset, 'README.md'), 'utf8');
+/** Values for one year as { lgd: value }. */
+function yearSlice(m: MetricFile, year: number): Record<string, number | string | null> {
+    const i = m.years.indexOf(year);
+    return Object.fromEntries(Object.entries(m.values).map(([k, v]) => [k, i < 0 ? null : v[i]]));
+}
+
+
+// ===== Inline copy: src/config/metrics.mjs =====
+// Metric registry (MAP.md §3). One entry per column shown in the Atlas.
+// Adding a metric = adding an entry here and running `npm run data`.
+//
+// scale:  warm | anomaly | wet | wetdry | dry | category   (see src/lib/scales.ts)
+// breaks: quantile | diverging-symmetric | fixed | categorical
+
+/** @typedef {{ id:string, dataset:string, label:string, short:string, unit:string,
+ *   scale:string, breaks:string, help:string, caveat?:string, fixed?:number[],
+ *   categories?:string[], decimals:number, higherIs?:string, lowerIs?:string }} Metric */
+
+const GRID_TEMP = 'A 1-degree grid cell is about 110 km wide, so it smooths out the hottest afternoons. Read this as a trend, not as a station count.';
+const SMALL = 'Mumbai City and Mumbai Suburban rest on very few grid cells, so their figures describe the surrounding area as much as the district.';
+
+/** @type {Metric[]} */
+const METRICS = [
+  // ---------------------------------------------------------------- temperature
+  {
+    id: 'days_tmax_above_p90', dataset: 'temperature',
+    label: 'Unusually hot days (above the 1991 to 2020 90th percentile)', short: 'Hot days',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'hottest', lowerIs: 'least hot',
+    help: "Days when the maximum temperature beat the district's own 90th percentile for that time of year, measured over 1991 to 2020. It does not depend on a fixed threshold, so it is the fairest way to compare change over time.",
+  },
+  {
+    id: 'nights_tmin_above_p90', dataset: 'temperature',
+    label: 'Unusually warm nights', short: 'Warm nights',
+    unit: 'nights', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'warmest nights', lowerIs: 'coolest nights',
+    help: "Nights when the minimum temperature beat the district's own 1991 to 2020 90th percentile for that time of year.",
+  },
+  {
+    id: 'tmax_mean_anomaly_c', dataset: 'temperature',
+    label: 'Average daily maximum vs 1981 to 2010 (°C)', short: 'Tmax anomaly',
+    unit: '°C', scale: 'anomaly', breaks: 'diverging-symmetric', decimals: 2,
+    higherIs: 'warmest against normal', lowerIs: 'coolest against normal',
+    help: "The year's average daily maximum minus the district's 1981 to 2010 average. Above zero is hotter than normal.",
+  },
+  {
+    id: 'tmax_mean_c', dataset: 'temperature',
+    label: 'Average daily maximum (°C)', short: 'Avg max',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The average of every daily maximum temperature in the year.',
+  },
+  {
+    id: 'tmin_mean_c', dataset: 'temperature',
+    label: 'Average daily minimum (°C)', short: 'Avg min',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'warmest', lowerIs: 'coolest',
+    help: 'The average of every daily minimum temperature in the year.',
+  },
+  {
+    id: 'tmax_mean_mar_may_c', dataset: 'temperature',
+    label: 'Summer (March to May) average maximum (°C)', short: 'Summer max',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The average daily maximum across March, April and May.',
+  },
+  {
+    id: 'tmax_highest_c', dataset: 'temperature',
+    label: 'Hottest day of the year (°C)', short: 'Hottest day',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The highest daily maximum of the year, on the district average.',
+    caveat: GRID_TEMP,
+  },
+  {
+    id: 'days_tmax_40c_or_more', dataset: 'temperature',
+    label: 'Days at 40 °C or above', short: '40 °C days',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'hottest', lowerIs: 'least hot',
+    help: 'Days when the district-average maximum reached 40 °C or more.',
+    caveat: GRID_TEMP,
+  },
+  {
+    id: 'heatwave_days', dataset: 'temperature',
+    label: 'Heat wave days (IMD criteria)', short: 'Heat waves',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'most heat wave days', lowerIs: 'fewest heat wave days',
+    help: "Days meeting IMD's heat wave rule for the plains: 40 °C or more and at least 4.5 °C above the 1991 to 2020 normal, or 45 °C or more.",
+    caveat: "IMD's rule is written for weather stations. On a 1-degree grid the hottest afternoons are smoothed out, so these counts are far lower than station counts and are best read as a trend.",
+  },
+
+  // ------------------------------------------------------------------- rainfall
+  {
+    id: 'rainfall_jun_sep_departure_pct', dataset: 'rainfall',
+    label: 'Monsoon rainfall vs 1971 to 2020 average (%)', short: 'Monsoon departure',
+    unit: '%', scale: 'wetdry', breaks: 'diverging-symmetric', decimals: 1,
+    higherIs: 'wettest against normal', lowerIs: 'driest against normal',
+    help: "June to September rainfall compared with the district's 1971 to 2020 average, IMD's long period average. Zero is a normal monsoon.",
+  },
+  {
+    id: 'rainfall_annual_mm', dataset: 'rainfall',
+    label: 'Annual rainfall (mm)', short: 'Annual rain',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'Total rainfall in the calendar year.',
+    caveat: "IMD's grid gives Pune an exceptional 2005 (4,342 mm against a 1971 to 2020 average of 1,011 mm). We keep it as IMD published it.",
+  },
+  {
+    id: 'rainfall_jun_sep_mm', dataset: 'rainfall',
+    label: 'Monsoon (June to September) rainfall (mm)', short: 'Monsoon rain',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'Total rainfall from June to September, the south-west monsoon.',
+  },
+  {
+    id: 'rainy_days_2_5mm', dataset: 'rainfall',
+    label: 'Rainy days (2.5 mm or more)', short: 'Rainy days',
+    unit: 'days', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'most rainy days', lowerIs: 'fewest rainy days',
+    help: "Days with 2.5 mm of rain or more, IMD's definition of a rainy day.",
+  },
+  {
+    id: 'heavy_rain_days_64_5mm', dataset: 'rainfall',
+    label: 'Heavy rain days (64.5 mm or more)', short: 'Heavy rain days',
+    unit: 'days', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'most heavy rain days', lowerIs: 'fewest heavy rain days',
+    help: "Days with 64.5 mm or more on the district average, IMD's heavy rain threshold.",
+    caveat: 'Counted on the district average, so a downpour over part of a large district counts less than at a single rain gauge.',
+  },
+  {
+    id: 'rx1day_mm', dataset: 'rainfall',
+    label: 'Wettest day of the year (mm)', short: 'Wettest day',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 1,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'The highest one-day rainfall of the year, on the district average.',
+  },
+  {
+    id: 'monsoon_longest_dry_spell_days', dataset: 'rainfall',
+    label: 'Longest monsoon dry spell (days)', short: 'Dry spell',
+    unit: 'days', scale: 'dry', breaks: 'quantile', decimals: 0,
+    higherIs: 'longest dry spell', lowerIs: 'shortest dry spell',
+    help: 'The longest run of days under 2.5 mm between June and September. This is our definition; IMD has no fixed district rule.',
+  },
+  {
+    id: 'spi_jun_sep', dataset: 'rainfall',
+    label: 'Monsoon drought index (SPI)', short: 'SPI',
+    unit: 'SPI', scale: 'wetdry', breaks: 'fixed', decimals: 2,
+    fixed: [-2, -1.5, -1, 1, 1.5, 2],
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: "June to September rainfall placed on the district's 1971 to 2020 distribution. Below -1 is moderately dry, below -1.5 severely dry, below -2 extremely dry.",
+  },
+  {
+    id: 'monsoon_category', dataset: 'rainfall',
+    label: 'Monsoon category (IMD)', short: 'Category',
+    unit: '', scale: 'category', breaks: 'categorical', decimals: 0,
+    categories: ['large deficient', 'deficient', 'normal', 'excess', 'large excess'],
+    help: "IMD's class for the June to September departure from the 1971 to 2020 average: large deficient (-60 to -99%), deficient (-20 to -59%), normal (-19 to +19%), excess (+20 to +59%), large excess (+60% or more).",
+  },
+];
+
+const SMALL_DISTRICT_NOTE = SMALL;
+
+
+// ===== Inline copy: src/config/data.mjs =====
+// Where the site's data comes from. Plain JS (not TS) so that
+// scripts/build-data.mjs can import it on any Node 18+ without a TS loader.
+//
+// The data repo is the Bharatnomy *front* repo: the cleaned, per-state copy of
+// the warehouse, already joined on LGD codes. To move to newer data, change
+// DATA_REF to a newer commit of DATA_REPO and run `npm run data`.
+
+const DATA_REPO = 'https://github.com/sarveshkant2003-afk/bharatnomy-front';
+const DATA_REF = '7d9978fd6699bf5b7c83328f57bb257d099ce98a';
+
+// Set DATA_LOCAL=/path/to/a/checkout to build from a local copy instead of
+// cloning (offline work). The commit stamp is then read from that checkout.
+
+// The site covers India. Today only Maharashtra has district data; adding a
+// state means adding it here once its data is in the front repo.
+const STATE = { slug: 'maharashtra', name: 'Maharashtra', lgd: '27' };
+const STATES_MAPPED = [STATE];
+
+// All-India state outlines for the home page, dissolved from the Census 2011
+// district map (DataMeet) kept in the warehouse. Boundaries are those of 2011.
+const INDIA_BOUNDARIES = {
+  repo: 'https://github.com/sarveshkant2003-afk/bharatnomy-data',
+  ref: 'cd7ce2d673103cc0e606e3cc37e49a9ae75f849a',
+  dir: '_sources/datameet-maps/raw',
+  file: 'datameet-maps_census2011-districts_2011.shp',
+  stateField: 'ST_NM',
+};
+
+// Paths inside the data repo.
+const BOUNDARIES_PATH = `states/${STATE.slug}/districts.geojson`;
+
+// The only two datasets on the site. Adding a dataset = one entry here plus
+// its metrics in metrics.mjs.
+const DATASETS = [
+  {
+    slug: 'temperature',
+    code: 'BN-DATA-CLM-001',
+    lens: 'Climate adaptation & resilience',
+    folder: 'CLM_temperature-indices_1951-to-2024_MH_BNY_DIST',
+    path: `states/${STATE.slug}/climate-adaptation/CLM_temperature-indices_1951-to-2024_MH_BNY_DIST`,
+    title: 'Temperature and heat by district',
+    defaultMetric: 'days_tmax_above_p90',
+    source: 'IMD gridded daily temperature (1° grid)',
+    sourceUrl: 'https://imdpune.gov.in/lrfindex.php',
+  },
+  {
+    slug: 'rainfall',
+    code: 'BN-DATA-CLM-002',
+    lens: 'Climate adaptation & resilience',
+    folder: 'CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST',
+    path: `states/${STATE.slug}/climate-adaptation/CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST`,
+    title: 'Rainfall and monsoon by district',
+    defaultMetric: 'rainfall_jun_sep_departure_pct',
+    source: 'IMD gridded daily rainfall (0.25° grid)',
+    sourceUrl: 'https://imdpune.gov.in/lrfindex.php',
+  },
+];
+
+// Page-local render helpers. These are intentionally kept in the page file.
+const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+const sticker = (text: string, o: any = {}) => {
+  const tone = o.tone ?? 'paper', seed = o.seed ?? text, deg = tilt(seed, o.max ?? 1);
+  return `<span class="sticker sticker--${escapeHtml(tone)}${o.dashed ? ' sticker--dashed' : ''}${o.class ? ' ' + escapeHtml(o.class) : ''}" style="--tilt:${deg}deg">${o.tape ? '<span class="tape" aria-hidden="true"></span>' : ''}${escapeHtml(text)}</span>`;
+};
+const button = (label: string, o: any = {}) => {
+  const cls = `btn${o.primary ? ' btn--primary' : ''}${o.class ? ' ' + o.class : ''}`;
+  const arrow = o.arrow === undefined ? '→' : o.arrow;
+  const attrs = `${o.id ? ` id="${escapeHtml(o.id)}"` : ''}${o.download ? ' download' : ''}${o.type ? ` type="${escapeHtml(o.type)}"` : ''}${o.disabled ? ' disabled' : ''}`;
+  return o.href ? `<a href="${escapeHtml(o.href)}" class="${cls}"${attrs}><span>${label}</span>${arrow ? `<span class="btn-arrow" aria-hidden="true">${escapeHtml(arrow)}</span>` : ''}</a>` : `<button class="${cls}"${attrs}><span>${label}</span>${arrow ? `<span class="btn-arrow" aria-hidden="true">${escapeHtml(arrow)}</span>` : ''}</button>`;
+};
+const panel = (title: string, rows: any[], o: any = {}) => `<section class="panel${o.class ? ' ' + o.class : ''}"${o.id ? ` id="${escapeHtml(o.id)}"` : ''} aria-label="${escapeHtml(title)}"${o.tone ? ` data-tone="${escapeHtml(o.tone)}"` : ''}><span class="panel-plus" aria-hidden="true">+</span><h3 class="label panel-title">${escapeHtml(title)}</h3><dl class="panel-rows">${rows.map((r) => `<div class="panel-row"><dt class="label soft">${escapeHtml(r.label)}</dt><dd class="panel-val num">${escapeHtml(r.value)}${r.note ? `<span class="label soft panel-note">${escapeHtml(r.note)}</span>` : ''}</dd></div>`).join('')}</dl>${o.foot ? `<p class="label soft panel-foot">${escapeHtml(o.foot)}</p>` : ''}</section>`;
+const ticker = (facts: string[], o: any = {}) => { const label = o.label ?? 'Latest readings', speed = o.speed ?? 90, dur = Math.round(facts.join('   ').length / 120 * speed); const list = facts.map((f) => `<li>${escapeHtml(f)}</li>`).join(''); return `<section class="ticker" aria-label="${escapeHtml(label)}" tabindex="0" style="--ticker-dur:${dur}s"><div class="ticker-track"><ul class="ticker-list label">${list}</ul><ul class="ticker-list label ticker-dup" aria-hidden="true">${list}</ul></div></section>`; };
+const margin = (body: string, o: any = {}) => `<aside class="mnote${o.class ? ' ' + o.class : ''}"${o.to ? ` data-leader-to="${escapeHtml(o.to)}"` : ''}${o.at ? ` data-leader-at="${escapeHtml(o.at)}"` : ''}>${o.label ? `<span class="label mnote-label">${escapeHtml(o.label)}</span>` : ''}${body}</aside>`;
+const highlighter = (text: string, seed = 'hl') => {
+  const words = text.split(/\s+/);
+  const mark = (k: number) => { const r = rng(`${seed}-${k}`); const top = Array.from({ length: 5 }, (_, i) => [i * 25, 4 + r() * 4]); const bot = Array.from({ length: 5 }, (_, i) => [100 - i * 25, 16 + r() * 3.5]); return 'M' + [...top, ...bot].map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L') + ' Z'; };
+  return `<span class="hl-group">${words.map((w, i) => `<span class="hl${i < words.length - 1 ? ' hl--join' : ''}"><svg class="hl-mark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"><path d="${mark(i)}" /></svg><span class="hl-text">${escapeHtml(w)}</span></span>${i < words.length - 1 ? ' ' : ''}`).join('')}</span>`;
+};
+const indexCard = (body: string, o: any = {}) => { const seed = o.seed ?? o.title ?? 'card', tiltDeg = tilt(seed, o.max ?? 0.8), Tag = o.as ?? 'article', H = o.titleTag ?? 'h3'; return `<${Tag} class="card${o.class ? ' ' + escapeHtml(o.class) : ''}" data-tone="${escapeHtml(o.tone ?? '')}" style="--tilt:${tiltDeg}deg">${o.tape ? '<span class="tape tape--card" aria-hidden="true"></span>' : ''}${o.title ? `<${H} class="display card-title">${escapeHtml(o.title)}</${H}>` : ''}${o.meta ? `<p class="label card-meta">${escapeHtml(o.meta)}</p>` : ''}<div class="card-body">${body}</div></${Tag}>`; };
+const lensTab = (o: any) => { const roman = ['I','II','III','IV','V'][o.n - 1]; const first = o.name.split(' ')[0].replace(/&$/, ''); return `<article class="lens lens--${o.lens}${o.class ? ' ' + o.class : ''}" style="--tab-offset:${(o.n - 1) * 19}%"><div class="lens-tab"><span class="label">${roman}</span><span class="lens-tab-name">${escapeHtml(first)}</span></div><div class="lens-page">${sticker(o.status, { tone: o.n === 1 ? o.lens : 'paper', seed: `lens-${o.n}`, class: 'lens-status' })}<h3 class="display t-l lens-name">${escapeHtml(o.name)}</h3><p class="lens-line">${escapeHtml(o.line)}</p><ul class="lens-focus label">${o.focus.map((f: string) => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div></article>`; };
+const folio = (o: any) => `<p class="folio label${o.sticky ? ' folio--sticky' : ''}${o.class ? ' ' + o.class : ''}"><span>${escapeHtml(o.code)}</span>${o.chapter ? `<span class="folio-sep" aria-hidden="true">·</span><span>CH. ${escapeHtml(o.chapter)}</span>` : ''}<span class="folio-sep" aria-hidden="true">·</span><span>${escapeHtml(o.title)}</span></p>`;
+const legend = (o: any) => { const gaps = [12,8,5.5,3.6,2.5]; return `<figure class="legend${o.class ? ' ' + o.class : ''}" style="--tilt:${tilt(o.seed ?? o.title, 0)}deg"><figcaption class="label legend-title">${escapeHtml(o.title)}</figcaption>${o.hachure ? `<div class="legend-hatch"><svg viewBox="0 0 150 22" width="150" height="22" aria-hidden="true">${gaps.map((g,i)=>`<svg x="${i*30}" y="0" width="28" height="22" viewBox="0 0 28 22">${Array.from({length:Math.ceil(50/g)+1},(_,k)=>`<line x1="${k*g-20}" y1="22" x2="${k*g}" y2="0" stroke="currentColor" stroke-width="0.7"/>`).join('')}<rect x="0.5" y="0.5" width="27" height="21" fill="none" stroke="currentColor" stroke-width="0.75"/></svg>`).join('')}</svg><p class="label"><span>SPARSE = FEW HOT DAYS</span><span>DENSE = MANY</span></p>${o.range ? `<p class="mono legend-range">${escapeHtml(o.range)}</p>` : ''}</div>` : `<ul class="legend-list">${(o.entries ?? []).map((e:any)=>`<li><span class="legend-swatch" style="background:${escapeHtml(e.color)}"></span><span class="mono">${escapeHtml(e.label)}</span></li>`).join('')}${o.nodata ? '<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">no data</span></li>' : ''}</ul>`}</figure>`; };
+const trendFigure = (o: any) => `<figure class="trendfig${o.class ? ' ' + o.class : ''}">${o.caption ? `<p class="label trendfig-cap">${escapeHtml(o.caption)}</p>` : ''}<div class="trendfig-plot">${renderTrend(o)}</div><figcaption class="source label">SOURCE: ${escapeHtml(o.source)}${o.href ? ` · <a href="${escapeHtml(o.href)}">OPEN IN ATLAS</a>` : ''}</figcaption></figure>`;
+const specimenTag = (o: any) => { const d=o.dataset, key=o.seed ?? d?.code ?? o.planned ?? 'tag'; const dg=tilt(key,1), drop=Math.round(rng(key+'drop')()*20), H=o.headingTag??'h3'; const basePath=d?u(`/data/${d.slug}/${d.folder}`):''; return `<article class="tag${d?'':' tag--planned'}${o.class?' '+o.class:''}" style="--tilt:${dg}deg; --drop:${drop}px"><span class="tag-string" aria-hidden="true"></span><span class="tag-hole" aria-hidden="true"></span>${d?`<p class="label tag-code">${escapeHtml(d.code)}</p><${H} class="display tag-title"><a href="${u(`/datasets/${d.slug}`)}">${escapeHtml(d.title)}</a></${H}><p class="label tag-cover">${escapeHtml(o.state??'Maharashtra').toUpperCase()} · ${d.districts} DISTRICTS · ${d.first_year}–${d.last_year}</p><dl class="tag-facts label"><div><dt>Columns</dt><dd class="num">${d.columns}</dd></div><div><dt>Rows</dt><dd class="num">${d.rows.toLocaleString('en-IN')}</dd></div><div><dt>Formats</dt><dd>CSV · JSON</dd></div><div><dt>Size</dt><dd class="num">${d.csv_kb} KB CSV</dd></div></dl><p class="tag-dl"><a href="${basePath}.csv" download>CSV</a><a href="${basePath}.json" download>JSON</a><a href="${u(`/datasets/${d.slug}`)}">Dataset page</a></p>`:`<p class="label tag-code">COMING</p><${H} class="display tag-title">${escapeHtml(o.planned)}</${H}>${o.note?`<p class="tag-note">${escapeHtml(o.note)}</p>`:''}`}</article>`; };
+const sketchMap = (o: any) => { const fc=districtsGeo(); const fitTo=o.extend?{type:'FeatureCollection',features:[...fc.features,{type:'Feature',properties:{},geometry:{type:'MultiPoint',coordinates:[[o.extend[0],o.extend[1]],[o.extend[2],o.extend[3]]]}}]}:stateGeo(); const frame=frameFor(fitTo,o.width??640,o.height??470,o.pad??14); const ds=sketchDistricts(fc,{frame,values:o.values,range:o.range,seedSalt:o.seedSalt??0}); const pts=(o.waypoints??[]).map((w:any,i:number)=>{let x:number,y:number;if(w.lgd){const d=ds.find((q:any)=>q.lgd===w.lgd)!;x=d.x;y=d.y;}else [x,y]=frame.project([w.lon,w.lat]);return {...w,x,y,n:String(i+1).padStart(2,'0'),ring:roughCircle(x,y,22,900+i)};}); const route=pts.length>1?'M'+pts.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L'):''; return `<svg class="sketch${o.colors?' sketch--color':''}${o.class?' '+o.class:''}" viewBox="0 0 ${o.width??640} ${o.height??470}" role="img" aria-label="${escapeHtml(o.title)}">${o.desc?`<desc>${escapeHtml(o.desc)}</desc>`:''}<g class="sketch-districts">${ds.map((d:any)=>`<g class="sk-d${d.lgd===o.selected?' is-selected':''}" data-lgd="${d.lgd}" data-name="${escapeHtml(d.name)}"><path class="sk-hit" d="${d.plain}"${o.colors?.[d.lgd]?` style="fill:${o.colors[d.lgd]}"`:''}/>${d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:''}<path class="sk-line" d="${d.outline.join(' ')}"/><title>${escapeHtml(d.name)}${o.values?`: ${o.values[d.lgd]==null?'no data':fmt(o.values[d.lgd],0)}${o.unit?' '+o.unit:''}`:''}</title></g>`).join('')}</g>${route?`<path class="wp-route" d="${route}"/>`:''}${pts.map(p=>`<g class="wp" transform-origin="${p.x} ${p.y}"><circle cx="${p.x}" cy="${p.y}" r="11" class="wp-fill"/><path d="${p.ring}" class="wp-ring"/><text x="${p.x}" y="${p.y+3.5}" text-anchor="middle" class="wp-n">${p.n}</text><text x="${p.x+16}" y="${p.y+4}" class="wp-label">${escapeHtml(p.label)}</text></g>`).join('')}</svg>`; };
+const indiaSketch = (o:any={}) => { const width=o.width??620,height=o.height??700,cls=o.class??'',thaneId=o.thaneId??'sk-thane',mhId=o.mhId??'sk-mh';const india=indiaGeo(),frame=frameFor(india,width,height,8),states=sketchOutlines(india,frame,{roughness:.55}),mh=districtsGeo(),uniform=Object.fromEntries(mh.features.map((f:any)=>[String(f.properties.lgd),1])),ds=sketchDistricts(mh,{frame,values:uniform,range:[0,1],gap:[4.2,4.2],roughness:.5,hatchWeight:.5}),thane=ds.find((d:any)=>d.name==='Thane'),mhState=states.find((s:any)=>s.props.mapped),cx=ds.reduce((a:number,d:any)=>a+d.x,0)/ds.length,cy=ds.reduce((a:number,d:any)=>a+d.y,0)/ds.length,ring=roughCircle(cx,cy,22,4242);return `<svg class="india ${cls}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Map of India by state. Maharashtra is inked in with its 35 districts; other states are outlines, not yet mapped."><g class="india-states">${states.filter((s:any)=>!s.props.mapped).map((s:any)=>`<path d="${s.d}"><title>${escapeHtml(s.props.name)}: not yet mapped</title></path>`).join('')}</g><g class="india-mh" id="${mhId}"><g class="india-mh-fill">${ds.map((d:any)=>`<path d="${d.plain}"/>`).join('')}</g><g class="india-mh-hatch">${ds.map((d:any)=>`<path d="${d.hatch.join(' ')}"/>`).join('')}</g><g class="india-mh-lines">${ds.map((d:any)=>`<path class="draw" pathLength="1" d="${d.outline.join(' ')}"${d.name==='Thane'?` id="${thaneId}"`:''}><title>${escapeHtml(d.name)}</title></path>`).join('')}</g>${mhState?`<path class="india-mh-edge" d="${mhState.d}"/>`:''}</g><g class="india-wp" id="sk-mh-pt"><circle cx="${cx}" cy="${cy}" r="11" class="wp-fill"/><path d="${ring}" class="wp-ring"/><text x="${cx}" y="${cy+3.5}" text-anchor="middle" class="wp-n">01</text></g>${thane?`<circle cx="${thane.x}" cy="${thane.y}" r="1" fill="none" id="${thaneId}-pt"/>`:''}</svg>`; };
+const census = (slotHtml: string, o:any={}) => {
+  const width=o.width??640,height=o.height??470,s=stats(),fc=districtsGeo(),frame=frameFor(stateGeo(),width,height,10),df=decadeFrames();
+  const idx=df.decades.map((d:any,i:number)=>({...d,i})).filter((d:any,k:number,all:any[])=>d.complete||k===all.length-1).filter((d:any)=>d.start>=1960);
+  const frames=idx.map((d:any)=>({label:d.complete?d.label:`${d.first}–${d.last} · PARTIAL`,first:d.first,last:d.last,i:d.i,values:Object.fromEntries(Object.entries(df.values).map(([k,v]:any)=>[k,v[d.i]]))}));
+  const all=frames.flatMap((f:any)=>Object.values(f.values) as number[]).filter((v:any)=>v!=null).sort((a:number,b:number)=>a-b),q=(p:number)=>all[Math.round((all.length-1)*p)],range:[number,number]=[q(.05),q(.95)];
+  const outline=sketchDistricts(fc,{frame,roughness:.7}),shaded=frames.map((f:any)=>sketchDistricts(fc,{frame,values:f.values,range,seedSalt:f.first,roughness:.7}));
+  const cls=classify({kind:'warm',breaks:'quantile',values:all,decimals:0,unit:'days'}),colors=Object.fromEntries(outline.map((d:any)=>[d.lgd,frames.map((f:any)=>cls.color(f.values[d.lgd])??'none')]));
+  const iFirst=frames.findIndex((f:any)=>f.label===s.decade_first),iLast=frames.findIndex((f:any)=>f.label===s.decade_last),m=metricFile('temperature','days_tmax_above_p90');
+  const SW=1200,SH=150,pad={l:44,r:16,t:18,b:26},x=scaleLinear().domain([m.years[0],m.years[m.years.length-1]]).range([pad.l,SW-pad.r]),ymax=Math.max(...(m.state_mean as number[])),y=scaleLinear().domain([0,ymax*1.08]).range([SH-pad.b,pad.t]).nice(3),pts=m.years.map((yr:number,i:number)=>[x(yr),y(m.state_mean![i] as number)] as [number,number]),pen=roughLine(pts,1951,.35),decadesTicks=m.years.filter((yr:number)=>yr%10===0),penData={years:m.years,mean:m.state_mean,x0:pad.l,x1:SW-pad.r,y0:y.domain()[0],y1:y.domain()[1],top:pad.t,bottom:SH-pad.b},frameMeta=frames.map((f:any)=>({label:f.label,first:f.first,last:f.last})),tally=Object.fromEntries(outline.map((d:any)=>[d.lgd,{name:d.name,a:frames[iFirst]?.values[d.lgd],b:frames[iLast]?.values[d.lgd]}]));
+  const legendHtml=legend({class:'census-legend',title:'Unusually hot days a year · decade average',entries:cls.legend,seed:'census'});
+  return `<div class="census" data-census data-colors='${JSON.stringify(colors)}' data-frames='${JSON.stringify(frameMeta)}' data-pen='${JSON.stringify(penData)}' data-tally='${JSON.stringify(tally)}' data-labels="${s.decade_first}|${s.decade_last}"><div class="census-map"><p class="census-decade display" aria-live="off" data-decade></p><svg class="sketch census-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Maharashtra's districts shaded by unusually hot days, decade by decade from ${frames[0].label} to ${frames[frames.length-1].label}. Darker colour and denser shading mean more hot days."><g class="census-fill">${outline.map((d:any)=>`<path data-lgd="${d.lgd}" d="${d.plain}"/>`).join('')}</g>${shaded.map((ds:any[],k:number)=>`<g class="census-frame" data-frame="${k}"><g id="cf-${k}">${ds.map((d:any)=>d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:'').join('')}</g></g>`).join('')}<g class="census-outline" id="census-outline">${outline.map((d:any)=>`<g class="sk-d" data-lgd="${d.lgd}"><path class="sk-hit" d="${d.plain}"/><path class="sk-line" d="${d.outline.join(' ')}"/></g>`).join('')}</g></svg><div class="census-tally label" data-tally-card hidden></div><div class="census-ruler"><label class="label" for="census-slider">Decade</label><input id="census-slider" type="range" min="0" max="${frames.length-1}" step="1" value="0" data-slider aria-valuetext="${escapeHtml(frames[0].label)}"/><ol class="census-ticks label" aria-hidden="true">${frames.map((f:any)=>`<li>${escapeHtml(f.label.replace(' · PARTIAL',''))}</li>`).join('')}</ol></div>${legendHtml}</div><div class="census-lines">${slotHtml}</div><figure class="census-strip"><svg viewBox="0 0 ${SW} ${SH}" preserveAspectRatio="none" role="img" aria-label="Unusually hot days, 35-district average, ${m.years[0]} to ${m.years[m.years.length-1]}."><defs><clipPath id="pen-clip"><rect x="0" y="0" width="${SW}" height="${SH}" data-pen-clip/></clipPath></defs><rect class="strip-band" x="${x(1991)}" y="${pad.t}" width="${x(2020)-x(1991)}" height="${SH-pad.t-pad.b}"/>${y.ticks(3).map((t:number)=>`<g><line class="trend-grid" x1="${pad.l}" x2="${SW-pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="trend-tick" x="${pad.l-8}" y="${y(t)+3}" text-anchor="end">${t}</text></g>`).join('')}<line class="trend-axis" x1="${pad.l}" x2="${SW-pad.r}" y1="${SH-pad.b}" y2="${SH-pad.b}"/>${decadesTicks.map((t:number)=>`<g><line class="trend-axis" x1="${x(t)}" x2="${x(t)}" y1="${SH-pad.b}" y2="${SH-pad.b+5}"/><text class="trend-tick" x="${x(t)}" y="${SH-6}" text-anchor="middle">${t}</text></g>`).join('')}<path class="strip-pen" d="${pen}" clip-path="url(#pen-clip)"/><g class="strip-nib" data-pen-nib><circle r="4"/><line x1="0" y1="-5" x2="7" y2="-16"/></g></svg><figcaption class="label soft">Days a year above the 1991–2020 90th percentile · 35-district average · shaded band = 1991–2020 normal</figcaption></figure></div>`;
+};
+const pageStats = stats();
+// BN-RES: a lab notebook entry with almost nothing in it yet, and honest about it.
+const outputs = [
+  ['Working papers', 'The full technical version, for readers who want the complete method and underlying data.'],
+  ['Reports', 'Longer-form, structured analysis meant to stand on its own without a companion paper.'],
+  ['Policy briefs', 'Short and direct, built for readers who need the conclusion and its practical implication quickly.'],
+];
+const questions = [
+  'Which under-reported macroeconomic indicators give citizens and investors the clearest decision-making signal?',
+  'Can systematic public-data collection compensate for delays or gaps in official reporting?',
+  'What are the localised socio-economic trade-offs of moving away from coal in energy-dependent regional economies?',
+  'How can public datasets better capture real-time climate-adaptation readiness at the district level?',
+];
+const pageTitle = "Research";
+const pageDescription = "Bharatnomy has not published a paper yet. The first working paper, on Heat Action Plans across Maharashtra, is in progress.";
+
+---
+<!doctype html>
+<html lang="en" data-base={BASE}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle === 'Bharatnomy' ? pageTitle : `${pageTitle} · Bharatnomy`}</title>
+    <meta name="description" content={pageDescription} />
+    
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <link rel="icon" href={u("/favicon.svg")} type="image/svg+xml" />
+    <meta name="theme-color" content="#F2F3EF" />
+    <script is:inline>document.documentElement.classList.add('js');</script>
+  </head>
+  <body class="" data-base={BASE}>
+    <a class="skip" href="#main">Skip to content</a>
+    <Navbar code="BN-RES" coordsLabel="FOCUS" />
+    <main id="main">
+
+  <div class="res sheet">
+    <header class="res-head bleed bleed-clm">
+      <h1 class="display t-mega res-title">Research</h1>
+      <p class="t-lead res-status">We have not published a paper yet. A first working paper is in progress.</p>
+    </header>
+
+    <Fragment set:html={indexCard("<p>Indian districts are increasingly required to hold Heat Action Plans, but having a plan on paper and implementing one on the ground are different facts. We are building a district-by-district record of what is documented versus what is operating.</p>\n      <p><strong>Phase:</strong> architecture, establishing the interdisciplinary method and topic-selection criteria. <strong>Next:</strong> completing selection of the first two to three research topics.</p>", {class:"res-card", title:"Tracking Heat Action Plans across Maharashtra.", meta:"PRJ-01 · In progress", seed:"prj-01", tone:"clm", titleTag:"h2"})} />
+    <div class="res-sticker"><Fragment set:html={sticker("ARCHITECTURE PHASE", {tone:"clm", seed:"res-phase"})} /></div>
+
+    <section class="res-contents" aria-labelledby="res-out">
+      <h2 id="res-out" class="label">Contents · output types</h2>
+      <ol class="leaders">
+        {outputs.map(([t, d], i) => (
+          <li><span class="leaders-n mono">{String(i + 1).padStart(2, '0')}</span><span class="leaders-t display">{t}</span><span class="leaders-dots" aria-hidden="true"></span><span class="label soft">pending</span><p class="leaders-d soft">{d}</p></li>
+        ))}
+      </ol>
+    </section>
+
+    <section class="res-q bleed bleed-eqt" aria-labelledby="res-q-h">
+      <h2 id="res-q-h" class="label">Open questions we are pursuing</h2>
+      <ol class="qlist">{questions.map((q) => <li>{q}</li>)}</ol>
+      <p class="soft res-scope">A topic is in scope when it meets a high bar for national significance, has clear use for citizens or market actors, and touches at least two of law, economics, policy and finance.</p>
+    </section>
+
+    <p class="res-notify t-lead">We will write to you when the first paper is out: <a href="mailto:namaste@bharatnomy.com?subject=Notify%20me">namaste@bharatnomy.com</a>.</p>
+  </div>
+
+    </main>
+    <Footer stats={pageStats} />
+    <script is:inline>
+// LeaderLine: dashed 1px ink line with an open-circle end, from a MarginNote to
+// the element it annotates. Positioned from geometry, recalculated on resize.
+// Hidden below 900px (CSS), where notes sit inline instead.
+const NS = 'http://www.w3.org/2000/svg';
+function anchor(r, side, sx, sy) {
+    switch (side) {
+        case 'left': return [r.left + sx, r.top + r.height / 2 + sy];
+        case 'right': return [r.right + sx, r.top + r.height / 2 + sy];
+        case 'top': return [r.left + r.width / 2 + sx, r.top + sy];
+        case 'bottom': return [r.left + r.width / 2 + sx, r.bottom + sy];
+        default: return [r.left + r.width / 2 + sx, r.top + r.height / 2 + sy];
+    }
+}
+function drawLeaders(root = document) {
+    const notes = Array.from(root.querySelectorAll('[data-leader-to]')).filter((n) => n.dataset.leaderTo);
+    let svg = document.getElementById('leader-layer');
+    if (!svg) {
+        svg = document.createElementNS(NS, 'svg');
+        svg.id = 'leader-layer';
+        svg.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(svg);
+    }
+    const W = document.documentElement.scrollWidth, H = document.documentElement.scrollHeight;
+    svg.setAttribute('width', String(W));
+    svg.setAttribute('height', String(H));
+    svg.replaceChildren();
+    if (innerWidth < 900)
+        return;
+    const sx = scrollX, sy = scrollY;
+    for (const note of notes) {
+        const target = document.getElementById(note.dataset.leaderTo);
+        if (!target || note.offsetParent === null || target.getClientRects().length === 0)
+            continue;
+        if (note.closest('[data-leaders-off]'))
+            continue;
+        const nr = note.getBoundingClientRect(), tr = target.getBoundingClientRect();
+        const tc = [tr.left + tr.width / 2, tr.top + tr.height / 2];
+        const nc = [nr.left + nr.width / 2, nr.top + nr.height / 2];
+        const horizontal = tc[0] > nr.right || tc[0] < nr.left;
+        const path = document.createElementNS(NS, 'path');
+        let x2, y2;
+        if (horizontal) {
+            // Route: out of the note's first line, along the gutter beside the
+            // annotated block, then under the target's line of text to the target.
+            const right = tc[0] > nc[0];
+            const block = target.closest('p, li, figure, svg, h1, h2, h3, [data-leader-block]') ?? target;
+            const br = block.getBoundingClientRect();
+            const x1 = (right ? nr.right + 8 : nr.left - 8) + sx;
+            const y1 = nr.top + 12 + sy;
+            let gx = right ? Math.max(br.left - 14, nr.right + 16) : Math.min(br.right + 14, nr.left - 16);
+            gx += sx;
+            const at = note.dataset.leaderAt || 'bottom';
+            [x2, y2] = at === 'bottom' ? [tc[0] + sx, tr.bottom + 3 + sy] : anchor(tr, at, sx, sy);
+            path.setAttribute('d', `M${x1},${y1} H${gx} V${y2} H${x2}`);
+        }
+        else {
+            // note directly above or below: straight drop
+            const below = tc[1] > nc[1];
+            const x1 = Math.min(Math.max(tc[0], nr.left + 12), nr.right - 12) + sx;
+            const y1 = (below ? nr.bottom + 8 : nr.top - 8) + sy;
+            [x2, y2] = [tc[0] + sx, (below ? tr.top - 3 : tr.bottom + 3) + sy];
+            path.setAttribute('d', `M${x1},${y1} V${(y1 + y2) / 2} H${x2} V${y2}`);
+        }
+        path.setAttribute('class', 'leader');
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', String(x2));
+        dot.setAttribute('cy', String(y2));
+        dot.setAttribute('r', '3');
+        dot.setAttribute('class', 'leader-end');
+        if (note.closest('.ground-ink')) {
+            path.classList.add('leader--inv');
+            dot.classList.add('leader--inv');
+        }
+        svg.append(path, dot);
+    }
+}
+function initLeaders() {
+    let raf = 0;
+    const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => drawLeaders()); };
+    redraw();
+    addEventListener('resize', redraw);
+    addEventListener('load', redraw);
+    document.fonts?.ready.then(redraw);
+    if ('ResizeObserver' in window)
+        new ResizeObserver(redraw).observe(document.body);
+    window.__redrawLeaders = redraw;
+}
+
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Entrances: 14px rise, staggered via --d set in markup.
+const rise = document.querySelectorAll('.rise');
+if (reduce || !('IntersectionObserver' in window)) {
+    rise.forEach((el) => el.classList.add('is-in'));
+}
+else {
+    const io = new IntersectionObserver((entries) => {
+        for (const e of entries)
+            if (e.isIntersecting) {
+                e.target.classList.add('is-in');
+                io.unobserve(e.target);
+            }
+    }, { rootMargin: '0px 0px -8% 0px' });
+    rise.forEach((el) => io.observe(el));
+}
+initLeaders();
+
+    </script>
+  </body>
+</html>
+<style is:global>
+/* ===== Page styles: design tokens ===== */
+/* DESIGN.md §2. Every colour, size and rhythm on the site comes from here. */
+:root {
+  /* colour: one accent, by rule */
+  --paper: #F2F3EF;
+  --paper-raised: #FBFBF8;
+  --paper-back: color-mix(in srgb, #F2F3EF 96%, #16181C);   /* footer "back cover" */
+  --grid-minor: rgba(22, 24, 28, 0.02);
+  --grid-major: rgba(22, 24, 28, 0.05);
+  --ink: #16181C;
+  --ink-soft: #4C535C;
+  --ink-faint: rgba(22, 24, 28, 0.32);   /* hairlines and ticks only, never text */
+  --accent: #2346C7;
+  --accent-wash: rgba(35, 70, 199, 0.14);
+  --accent-ink: #F7F8F4;
+  --rule-blue: rgba(35, 70, 199, 0.13);  /* index-card ruling */
+
+  /* lens cardstock (categorical: tabs, chapter markers, stickers only) */
+  --lens-clm: #A9432F;  --lens-clm-ink: var(--paper);
+  --lens-eng: #D9A21B;  --lens-eng-ink: var(--ink);
+  --lens-mac: #4A7556;  --lens-mac-ink: var(--paper);
+  --lens-eqt: #3F5F8F;  --lens-eqt-ink: var(--paper);
+  --lens-com: #7D4E7A;  --lens-com-ink: var(--paper);
+
+  /* lens tints: light grounds for sections, cards and panels (colour pass, 19 Nov 2026) */
+  --tint-clm: #F5E4DE;
+  --tint-eng: #F8EED2;
+  --tint-mac: #E2ECE3;
+  --tint-eqt: #DFE6F0;
+  --tint-com: #EFE3ED;
+
+  /* type */
+  --f-display: "Big Shoulders Display", "Archivo", system-ui, sans-serif;
+  --f-text: "Geist", system-ui, sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --t-mega: clamp(4.5rem, 14vw, 13rem);
+  --t-xl: clamp(3.25rem, 2rem + 4.2vw, 6rem);
+  --t-l: clamp(2rem, 1.5rem + 1.6vw, 3.2rem);
+  --t-m: clamp(1.35rem, 1.15rem + 0.6vw, 1.9rem);
+  --t-body: 1.0625rem;
+  --t-small: 0.9375rem;
+  --t-label: 0.72rem;
+  --measure: 62ch;
+
+  --track-display: -0.012em;
+  --track-label: 0.08em;
+
+  /* rhythm: 4px base; the paper grid is 8px minor / 40px major */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 24px;
+  --s-6: 32px; --s-7: 40px; --s-8: 56px; --s-9: 80px; --s-10: 120px; --s-11: 160px;
+  --grid: 40px;
+  --gutter: clamp(16px, 4vw, 40px);
+  --page-max: 1440px;
+
+  /* lines */
+  --hair: 1px solid var(--ink);
+  --hair-soft: 1px solid var(--ink-faint);
+  --cut: 1px dashed var(--ink);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* Inverted ground (home chapter IV): two-stop accent, same hue */
+.ground-ink {
+  --paper-local: var(--ink);
+  --ink: #F2F3EF;
+  --ink-soft: #B9BFC7;
+  --ink-faint: rgba(242, 243, 239, 0.34);
+  --accent: #93A9F5;
+  --accent-wash: rgba(147, 169, 245, 0.22);
+  --grid-minor: rgba(242, 243, 239, 0.02);
+  --grid-major: rgba(242, 243, 239, 0.05);
+  background-color: #16181C;
+  color: var(--ink);
+}
+
+
+/* ===== Page styles: base ===== */
+/* DESIGN.md §3 and §7: the page ground and browser surfaces. */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body, h1, h2, h3, h4, p, figure, blockquote, dl, dd, ul, ol { margin: 0; }
+ul[class], ol[class] { list-style: none; padding: 0; }
+img, svg { display: block; max-width: 100%; }
+button, input, select { font: inherit; color: inherit; }
+
+html { background: var(--paper); color-scheme: light; }
+
+body {
+  min-height: 100vh;
+  font-family: var(--f-text);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--ink);
+  caret-color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+  /* graph paper: hard-stop hairlines, 8px minor, 40px major (not a gradient fill) */
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+  background-size: var(--grid) var(--grid), var(--grid) var(--grid), 8px 8px, 8px 8px;
+  background-position: -1px -1px;
+}
+
+/* paper grain: fixed noise, behind everything, does not move on scroll */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.02;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+[hidden] { display: none !important; }
+
+::selection { background: var(--accent-wash); color: inherit; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+a {
+  color: var(--accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-thickness 120ms linear;
+}
+a:hover { text-decoration-thickness: 2px; }
+a.ext::after { content: " ↗"; font-family: var(--f-mono); font-size: 0.8em; }
+
+/* type roles */
+.display, h1, h2 {
+  font-family: var(--f-display);
+  font-weight: 800;
+  letter-spacing: var(--track-display);
+  line-height: 0.94;
+  text-wrap: balance;
+}
+h3, h4 { font-family: var(--f-text); font-weight: 600; line-height: 1.25; text-wrap: balance; }
+p, li { text-wrap: pretty; }
+.t-mega { font-size: var(--t-mega); line-height: 0.86; letter-spacing: -0.02em; font-weight: 900; }
+.t-xl { font-size: var(--t-xl); }
+.t-l { font-size: var(--t-l); line-height: 0.98; font-weight: 700; }
+.t-m { font-size: var(--t-m); line-height: 1.1; font-weight: 700; }
+.t-lead { font-size: clamp(1.2rem, 1.05rem + 0.5vw, 1.45rem); line-height: 1.45; }
+.measure { max-width: var(--measure); }
+.label, .mono {
+  font-family: var(--f-mono);
+  font-size: var(--t-label);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+.mono { text-transform: none; letter-spacing: 0; font-size: 0.8125rem; font-weight: 400; }
+.soft { color: var(--ink-soft); }
+.accent { color: var(--accent); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* layout: 12 columns snapped to the 40px major grid where possible */
+.sheet {
+  width: 100%;
+  max-width: var(--page-max);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: var(--s-5);
+}
+@media (max-width: 899px) {
+  .sheet { grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: var(--s-4); }
+}
+
+/* full-bleed colour grounds without extra markup */
+.bleed { box-shadow: 0 0 0 100vmax var(--bleed); clip-path: inset(0 -100vmax); background: var(--bleed); }
+.bleed-clm { --bleed: var(--tint-clm); } .bleed-eng { --bleed: var(--tint-eng); } .bleed-mac { --bleed: var(--tint-mac); }
+.bleed-eqt { --bleed: var(--tint-eqt); } .bleed-com { --bleed: var(--tint-com); }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.skip {
+  position: absolute; left: var(--s-4); top: -100px; z-index: 50;
+  background: var(--ink); color: var(--paper); padding: var(--s-2) var(--s-4);
+}
+.skip:focus { top: var(--s-4); }
+
+/* entrance: 14px rise, 600ms, ease-out. JS adds .is-in; no JS = visible */
+.js .rise { opacity: 0; transform: translateY(14px); }
+.js .rise.is-in { opacity: 1; transform: none; transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out); transition-delay: var(--d, 0ms); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .js .rise { opacity: 1; transform: none; }
+}
+
+
+/* ===== Page styles: visual elements ===== */
+/* DESIGN.md §4: every component. Paper, ink, square corners, no soft shadows. */
+
+/* ---------------------------------------------------------- tape (shared) */
+.tape {
+  position: absolute;
+  width: 64px; height: 20px;
+  top: -10px; right: 14px;
+  background: rgba(22, 24, 28, 0.06);
+  border-left: 1px dashed rgba(22, 24, 28, 0.14);
+  border-right: 1px dashed rgba(22, 24, 28, 0.14);
+  transform: rotate(-7deg);
+  pointer-events: none;
+}
+.tape--card { left: 22px; right: auto; transform: rotate(-4deg); width: 84px; }
+
+/* ----------------------------------------------------------- StickerLabel */
+.sticker {
+  position: relative;
+  display: inline-block;
+  font-family: var(--f-mono);
+  font-size: var(--t-label);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  line-height: 1.2;
+  padding: 6px 10px 5px;
+  border: var(--hair);
+  background: var(--paper-raised);
+  color: var(--ink);
+  transform: rotate(var(--tilt, 0deg));
+  white-space: nowrap;
+}
+.sticker--ink { background: var(--ink); color: var(--paper); }
+.sticker--accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.sticker--clm { background: var(--lens-clm); color: var(--lens-clm-ink); }
+.sticker--eng { background: var(--lens-eng); color: var(--lens-eng-ink); }
+.sticker--mac { background: var(--lens-mac); color: var(--lens-mac-ink); }
+.sticker--eqt { background: var(--lens-eqt); color: var(--lens-eqt-ink); }
+.sticker--com { background: var(--lens-com); color: var(--lens-com-ink); }
+.sticker--dashed { background: transparent; border-style: dashed; }
+.sticker .tape { width: 34px; height: 13px; top: -8px; right: -10px; transform: rotate(32deg); }
+
+/* -------------------------------------------------- MarginNote + leaders */
+.mnote {
+  font-family: var(--f-text);
+  font-style: italic;
+  font-size: var(--t-small);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: 30ch;
+}
+.mnote-label { display: block; font-style: normal; margin-bottom: var(--s-1); color: var(--ink); }
+#leader-layer { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 5; overflow: visible; }
+.leader { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; }
+.leader-end { fill: var(--paper); stroke: var(--ink); stroke-width: 1; }
+.leader--inv { stroke: #F2F3EF; }
+.leader-end.leader--inv { fill: #16181C; }
+@media (max-width: 899px) {
+  #leader-layer { display: none; }
+  .mnote { max-width: none; border-left: 1px dashed var(--ink-faint); padding-left: var(--s-3); }
+}
+
+/* ------------------------------------------------------------ Highlighter */
+.hl { position: relative; display: inline-block; isolation: isolate; }
+.hl-mark { position: absolute; left: -0.07em; top: 0.16em; width: calc(100% + 0.14em); max-width: none; height: 0.7em; z-index: -1; overflow: visible; }
+/* one stroke per word: line breaks are unknown at build time, so no stroke over spaces */
+.hl-mark path { fill: var(--accent-wash); }
+
+/* ------------------------------------------------------------------ Folio */
+.folio { display: flex; flex-wrap: wrap; gap: 0 var(--s-2); color: var(--ink-soft); }
+.folio-sep { color: var(--ink-faint); }
+.folio--sticky { position: sticky; top: var(--s-5); }
+
+/* --------------------------------------------------------- InstrumentPanel */
+.panel {
+  position: relative;
+  border: var(--hair);
+  background: var(--paper-raised);
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  max-width: 340px;
+}
+.panel[data-tone] { background: var(--tint); } .panel[data-tone="clm"] { --tint: var(--tint-clm); } .panel[data-tone="eng"] { --tint: var(--tint-eng); } .panel[data-tone="mac"] { --tint: var(--tint-mac); } .panel[data-tone="eqt"] { --tint: var(--tint-eqt); }
+.panel-plus { position: absolute; top: 2px; right: 8px; font-family: var(--f-mono); font-size: 1rem; line-height: 1; }
+.panel-title { margin-bottom: var(--s-3); padding-bottom: var(--s-2); border-bottom: var(--hair); padding-right: var(--s-5); }
+.panel-rows { display: grid; gap: var(--s-2); }
+.panel-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--s-4); border-bottom: 1px dotted var(--ink-faint); padding-bottom: var(--s-1); }
+.panel-row:last-child { border-bottom: 0; }
+.panel-val { font-family: var(--f-mono); font-size: 0.95rem; font-weight: 500; text-align: right; }
+.panel-note { display: block; font-size: 0.62rem; }
+.panel-foot { margin-top: var(--s-3); }
+
+/* ------------------------------------------------------------------ Ticker */
+.ticker {
+  border-top: var(--hair);
+  border-bottom: var(--hair);
+  overflow: hidden;
+  background: var(--lens-eng);
+  color: var(--ink);
+  padding: 10px 0 9px;
+}
+.ticker-track { display: flex; width: max-content; animation: ticker var(--ticker-dur, 80s) linear infinite; }
+.ticker:hover .ticker-track, .ticker:focus .ticker-track, .ticker:focus-within .ticker-track { animation-play-state: paused; }
+.ticker-list { display: flex; gap: 0; padding: 0; margin: 0; list-style: none; white-space: nowrap; }
+.ticker-list li { padding: 0 var(--s-5); border-right: 1px solid rgba(22, 24, 28, 0.35); }
+@keyframes ticker { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track { animation: none; width: auto; }
+  .ticker-list { flex-wrap: wrap; white-space: normal; row-gap: var(--s-2); }
+  .ticker-dup { display: none; }
+}
+
+/* ----------------------------------------------------------------- LensTab */
+.lens { position: relative; padding-top: 29px; }
+.lens-tab {
+  position: absolute; top: 0; left: min(var(--tab-offset, 0%), calc(100% - 150px));
+  height: 30px; min-width: 132px;
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: 0 var(--s-4);
+  border: var(--hair); border-bottom: 0;
+  font-family: var(--f-mono); font-weight: 500; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.lens-page {
+  position: relative;
+  border: var(--hair);
+  border-top-width: 4px;
+  background: var(--paper-raised);
+  padding: var(--s-7) var(--s-6) var(--s-6);
+  min-height: 300px;
+}
+.lens-status { position: absolute; top: var(--s-4); right: var(--s-4); }
+.lens-name { max-width: 14ch; margin-bottom: var(--s-4); }
+.lens-line { max-width: 44ch; color: var(--ink-soft); margin-bottom: var(--s-5); }
+.lens-focus { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); }
+.lens-focus li { border-top: var(--hair); padding-top: 4px; }
+.lens--clm .lens-tab { background: var(--lens-clm); color: var(--lens-clm-ink); } .lens--clm .lens-page { border-top-color: var(--lens-clm); background: var(--tint-clm); }
+.lens--eng .lens-tab { background: var(--lens-eng); color: var(--lens-eng-ink); } .lens--eng .lens-page { border-top-color: var(--lens-eng); background: var(--tint-eng); }
+.lens--mac .lens-tab { background: var(--lens-mac); color: var(--lens-mac-ink); } .lens--mac .lens-page { border-top-color: var(--lens-mac); background: var(--tint-mac); }
+.lens--eqt .lens-tab { background: var(--lens-eqt); color: var(--lens-eqt-ink); } .lens--eqt .lens-page { border-top-color: var(--lens-eqt); background: var(--tint-eqt); }
+.lens--com .lens-tab { background: var(--lens-com); color: var(--lens-com-ink); } .lens--com .lens-page { border-top-color: var(--lens-com); background: var(--tint-com); }
+
+/* ------------------------------------------------------------- SpecimenTag */
+.tag {
+  position: relative;
+  width: min(100%, 300px);
+  margin-top: var(--drop, 0);
+  padding: var(--s-7) var(--s-5) var(--s-5);
+  background: var(--paper-raised);
+  border: var(--hair);
+  transform: rotate(var(--tilt, 0deg));
+  transform-origin: 50% -40px;
+}
+.tag::after { content: ""; position: absolute; inset: 5px; border: 1px dashed var(--ink-faint); pointer-events: none; }
+.tag-hole {
+  position: absolute; top: 14px; left: 50%; width: 14px; height: 14px; margin-left: -7px;
+  border: var(--hair); border-radius: 50%; background: var(--paper);
+  z-index: 1;
+}
+.tag-string {
+  position: absolute; left: 50%; bottom: calc(100% - 21px); width: 1px; height: calc(48px + var(--drop, 0px));
+  background: var(--ink);
+}
+.tag:not(.tag--planned) { border-top: 6px solid var(--lens-clm); }
+.tag-code { color: var(--ink-soft); margin-bottom: var(--s-2); }
+.tag-title { font-size: 1.85rem; line-height: 0.96; margin-bottom: var(--s-3); }
+.tag-title a { color: var(--ink); text-decoration: none; }
+.tag-title a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.tag-cover { margin-bottom: var(--s-4); padding-bottom: var(--s-3); border-bottom: var(--cut); }
+.tag-facts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2) var(--s-4); margin-bottom: var(--s-4); }
+.tag-facts dt { color: var(--ink-soft); font-size: 0.62rem; }
+.tag-facts dd { font-size: 0.75rem; letter-spacing: 0.02em; }
+.tag-dl { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-family: var(--f-mono); font-size: 0.8125rem; }
+.tag--planned { background: var(--paper); border: 1px dashed var(--ink-soft); }
+.tag--planned::after { display: none; }
+.tag-note { font-size: var(--t-small); color: var(--ink-soft); line-height: 1.45; margin-top: var(--s-2); }
+.tag--planned .tag-title { color: var(--ink-soft); font-size: 1.5rem; }
+.tag--planned .tag-hole { border-color: var(--ink-soft); }
+
+/* --------------------------------------------------------------- IndexCard */
+.card {
+  position: relative;
+  background-color: var(--paper-raised);
+  background-image:
+    linear-gradient(90deg, transparent 47px, var(--ink-soft) 47px, var(--ink-soft) 48px, transparent 48px),
+    repeating-linear-gradient(transparent 0 27px, var(--rule-blue) 27px 28px);
+  background-position: 0 0, 0 0;
+  border: var(--hair);
+  padding: 34px var(--s-5) 28px 64px;
+  transform: rotate(var(--tilt, 0deg));
+  line-height: 28px;
+}
+.card[data-tone] { border-top: 6px solid var(--band); }
+.card[data-tone="clm"] { --band: var(--lens-clm); } .card[data-tone="eng"] { --band: var(--lens-eng); } .card[data-tone="mac"] { --band: var(--lens-mac); } .card[data-tone="eqt"] { --band: var(--lens-eqt); } .card[data-tone="com"] { --band: var(--lens-com); }
+.card-title { font-size: 1.75rem; line-height: 28px; font-weight: 800; padding-top: 2px; margin-bottom: 0; }
+.card-meta { color: var(--ink-soft); line-height: 28px; margin-bottom: 0; }
+.card-body { font-size: var(--t-small); line-height: 28px; }
+.card-body p + p { margin-top: 0; }
+
+/* ------------------------------------------------------------------ Button */
+.btn {
+  display: inline-flex; align-items: center; gap: var(--s-3);
+  min-height: 44px;
+  padding: 10px 18px;
+  font-family: var(--f-text); font-weight: 500; font-size: 1rem; line-height: 1.2;
+  color: var(--ink); background: var(--paper-raised);
+  border: var(--hair); border-radius: 0;
+  text-decoration: none; cursor: pointer;
+  transition: box-shadow 120ms linear, transform 120ms linear;
+}
+.btn-arrow { font-family: var(--f-mono); }
+.btn:hover, .btn.is-hover { box-shadow: 2px 2px 0 var(--ink); transform: translate(-1px, -1px); text-decoration: none; }
+.btn:focus-visible, .btn.is-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn--primary { background: var(--ink); color: var(--paper); }
+.btn--primary:hover, .btn--primary.is-hover { box-shadow: 2px 2px 0 var(--accent); }
+.btn[disabled], .btn.is-disabled { color: var(--ink-soft); border-style: dashed; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* ------------------------------------------------------------- SketchMap */
+.sketch { width: 100%; height: auto; overflow: visible; }
+.sk-hit { fill: transparent; stroke: none; }
+.sk-line { fill: none; stroke: var(--ink); stroke-width: 0.9; stroke-linecap: round; stroke-linejoin: round; }
+.sk-hatch { fill: none; stroke: var(--ink); stroke-width: 0.6; stroke-linecap: round; opacity: 0.85; }
+.sketch--color .sk-hatch { opacity: 0.4; stroke-width: 0.55; }
+.sk-d.is-selected .sk-line { stroke: var(--accent); stroke-width: 2.2; }
+.sk-d.is-selected .sk-hatch { stroke: var(--accent); }
+.wp-route { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 4 4; }
+.wp-fill { fill: var(--paper-raised); }
+.wp-ring { fill: none; stroke: var(--ink); stroke-width: 1.2; }
+.wp-n { font-family: var(--f-mono); font-size: 9.5px; font-weight: 500; fill: var(--ink); }
+.wp-label { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 3px; }
+
+/* ------------------------------------------------------------- TrendChart */
+.trendfig { margin: 0; }
+.trendfig-cap { margin-bottom: var(--s-2); }
+.trendfig-plot svg { width: 100%; height: auto; overflow: visible; }
+.trend-grid { stroke: var(--ink-faint); stroke-width: 0.5; stroke-dasharray: 1 3; }
+.trend-axis { stroke: var(--ink); stroke-width: 1; }
+.trend-zero { stroke: var(--ink); stroke-width: 0.75; }
+.trend-tick { font-family: var(--f-mono); font-size: 10px; fill: var(--ink-soft); }
+.trend-band { fill: var(--accent-wash); opacity: 0.6; }
+.trend-bandlabel { font-family: var(--f-mono); font-size: 9px; letter-spacing: 0.06em; fill: var(--ink-soft); }
+.trend-ink { fill: none; stroke: var(--ink); stroke-width: 1.1; stroke-linejoin: round; }
+.trend-faint { fill: none; stroke: var(--ink-soft); stroke-width: 1; stroke-linejoin: round; }
+.trend-pen { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.trend-roll { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.trend-hl { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 2; }
+.trend-hllabel { font-family: var(--f-mono); font-size: 10px; fill: var(--accent); font-weight: 500; }
+.trend-dot { fill: var(--paper-raised); stroke: var(--accent); stroke-width: 2; }
+
+.source { color: var(--ink-soft); margin-top: var(--s-2); font-size: 0.66rem; line-height: 1.5; text-transform: uppercase; }
+.source a { color: var(--accent); }
+
+/* ------------------------------------------------------------------ Legend */
+.legend {
+  margin: 0; display: inline-block;
+  border: var(--hair); background: var(--paper-raised);
+  padding: var(--s-3) var(--s-4);
+  transform: rotate(var(--tilt, 0deg));
+  max-width: 300px;
+}
+.legend-title { margin-bottom: var(--s-2); }
+.legend-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.legend-list li { display: grid; grid-template-columns: 22px 1fr; gap: var(--s-2); align-items: center; }
+.legend-list .mono { font-size: 0.75rem; }
+.legend-swatch { width: 22px; height: 12px; border: 0.75px solid var(--ink); }
+.legend-swatch--nodata { background: repeating-linear-gradient(45deg, var(--paper-raised) 0 2px, var(--ink-soft) 2px 3px); }
+.legend-hatch svg { color: var(--ink); }
+.legend-range { display: block !important; font-size: 0.75rem !important; margin-top: 2px !important; }
+.legend-hatch p { display: flex; justify-content: space-between; gap: var(--s-4); margin-top: var(--s-2); font-size: 0.6rem; }
+
+/* ---------------------------------------------------------- tables (shared) */
+.table-wrap { overflow-x: auto; border: var(--hair); background: var(--paper-raised); }
+table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.dense th, .dense td, .md-table th, .md-table td { text-align: left; padding: 8px 12px; border-bottom: var(--hair-soft); vertical-align: top; }
+.dense thead th, .md-table thead th { font-family: var(--f-mono); font-size: var(--t-label); font-weight: 500; letter-spacing: var(--track-label); text-transform: uppercase; border-bottom: var(--hair); background: var(--paper); position: sticky; top: 0; }
+.dense th button { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.dense th button::after { content: "↕"; color: var(--ink-faint); }
+.dense th[aria-sort="ascending"] button::after { content: "↑"; color: var(--accent); }
+.dense th[aria-sort="descending"] button::after { content: "↓"; color: var(--accent); }
+.dense th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dense .r { text-align: right; }
+.dense code, .lab code { font-family: var(--f-mono); font-size: 0.82em; }
+.dense-code { display: block; font-size: 0.72rem; margin-top: 2px; }
+.md-table { overflow-x: auto; margin: var(--s-4) 0; border: var(--hair); background: var(--paper-raised); }
+
+
+
+/* ===== Page styles: page layouts ===== */
+/* Inner pages (PAGES.md). Each page has its own layout; shared bits first. */
+
+/* ------------------------------------------------------------ datasets */
+.dsx-head { padding-block: var(--s-8) var(--s-6); align-items: end; }
+.dsx-title { grid-column: 1 / 6; }
+.dsx-intro { grid-column: 6 / 12; display: grid; gap: var(--s-4); justify-items: start; }
+.dsx-drawer { position: relative; padding-block: var(--s-6) var(--s-8); }
+.dsx-string { position: absolute; top: var(--s-6); left: 0; width: 100%; height: 24px; overflow: visible; grid-column: 1 / -1; }
+.dsx-string path { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.dsx-tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--s-6) var(--s-5); padding-top: var(--s-7); align-items: flex-start; }
+.dsx-tags .tag { width: 236px; }
+.dsx-tags { gap: var(--s-6) var(--s-4) !important; }
+.dsx-table-sec { padding-block: var(--s-6); row-gap: var(--s-4); }
+.dsx-table-head { grid-column: 1 / 9; display: grid; gap: var(--s-2); }
+.dsx-table-sec .table-wrap { grid-column: 1 / -1; }
+.dsx-standard { padding-block: var(--s-8); row-gap: var(--s-5); align-items: start; }
+.dsx-panel { grid-column: 1 / 5; }
+.dsx-std-text { grid-column: 6 / 11; display: grid; gap: var(--s-3); }
+.dsx-note { grid-column: 6 / 11; }
+.dsx-ask { grid-column: 6 / 12; }
+
+/* ------------------------------------------------------- dataset (lab) */
+.lab { padding-block: var(--s-7) var(--s-8); row-gap: var(--s-6); align-items: start; }
+.lab-head { grid-column: 1 / 9; display: grid; gap: var(--s-3); }
+.lab-cover { color: var(--ink-soft); }
+.lab-main { grid-column: 1 / 9; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-7); min-width: 0; }
+.lab-sec, .lab-summary, .source { overflow-wrap: anywhere; }
+.lab-summary { max-width: 62ch; }
+.lab-map { margin: 0; display: grid; gap: var(--s-3); position: relative; }
+.lab-map .legend { position: absolute; right: 0; top: 54%; }
+.lab-sec { display: grid; gap: var(--s-3); max-width: 70ch; }
+.lab-sec > ul { padding-left: 1.1em; display: grid; gap: var(--s-2); margin: 0; }
+.lab-sec p { margin: 0; }
+.lab-sec .table-wrap, .lab-sec .md-table { max-width: none; }
+.lab-small { font-size: var(--t-small); }
+.cite { background: var(--paper-raised); border: var(--hair); padding: var(--s-4); font-size: 0.85rem; line-height: 1.6; }
+.lab-side { grid-column: 9 / 13; grid-row: 1 / 3; align-self: stretch; }
+.lab-side-inner { position: sticky; top: var(--s-5); display: grid; gap: var(--s-5); }
+.lab-side .panel { max-width: none; }
+.lab-dl { display: grid; gap: var(--s-2); }
+.lab-dl .btn { justify-content: space-between; }
+.lab-links { font-size: 0.8rem; line-height: 1.8; }
+.lab-notes { display: grid; gap: var(--s-4); }
+
+/* ------------------------------------------------------------ research */
+.res { padding-block: var(--s-7) var(--s-9); row-gap: var(--s-7); align-items: start; }
+.res-head { grid-column: 1 / -1; display: grid; gap: var(--s-4); }
+.res-title { margin-left: -0.04em; overflow-wrap: anywhere; }
+.res-status { max-width: 40ch; }
+.res-card { grid-column: 2 / 8; margin-top: var(--s-4); }
+.res-sticker { grid-column: 8 / 11; align-self: start; margin-top: var(--s-8); }
+.res-contents { grid-column: 1 / 9; }
+.leaders { list-style: none; margin: var(--s-4) 0 0; padding: 0; display: grid; gap: var(--s-4); }
+.leaders li { display: grid; grid-template-columns: 40px auto 1fr auto; align-items: baseline; column-gap: var(--s-3); }
+.leaders-t { font-size: var(--t-m); }
+.leaders-dots { border-bottom: 2px dotted var(--ink-faint); transform: translateY(-5px); }
+.leaders-d { grid-column: 2 / -1; font-size: var(--t-small); max-width: 60ch; }
+.res-q { grid-column: 1 / 9; display: grid; gap: var(--s-4); }
+.qlist { margin: 0; padding-left: 1.4em; display: grid; gap: var(--s-2); max-width: 64ch; }
+.qlist li::marker { font-family: var(--f-mono); color: var(--accent); }
+.res-scope { font-size: var(--t-small); max-width: 64ch; }
+.res-notify { grid-column: 1 / 10; }
+
+/* --------------------------------------------------------------- about */
+.spread { padding-block: var(--s-7) var(--s-8); row-gap: var(--s-6); align-items: start; }
+.spread-left { grid-column: 1 / 7; display: grid; gap: var(--s-4); position: relative; padding-right: var(--s-6); border-right: 1px dashed var(--ink-faint); }
+.spread-left h2.label { margin-top: var(--s-4); }
+.spread-lead { max-width: 18ch; }
+.spread-note { margin-top: var(--s-4); }
+.spread-right { grid-column: 7 / 13; display: grid; gap: var(--s-4); padding-left: var(--s-5); }
+.team { display: grid; gap: 0; }
+.team .card + .card { margin-top: -14px; }
+.team .card:nth-child(2) { margin-left: var(--s-7); }
+.team .card:nth-child(3) { margin-left: var(--s-3); }
+.spread-young { margin-top: var(--s-4); font-style: italic; }
+.howwe { padding-block: var(--s-6) var(--s-8); align-items: center; row-gap: var(--s-5); }
+.howwe-text { grid-column: 1 / 6; display: grid; gap: var(--s-4); }
+.howwe-fig { grid-column: 6 / 13; margin: 0; }
+.howwe-fig svg { width: 100%; height: auto; overflow: visible; }
+.howwe-link { stroke: var(--ink-faint); stroke-width: 0.75; stroke-dasharray: 3 4; }
+.howwe-spoke { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 4 3; }
+.howwe-district { fill: var(--paper-raised); stroke: var(--ink); stroke-width: 1.2; }
+.howwe-dlabel { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.08em; fill: var(--ink); }
+.howwe-fill { opacity: 0.9; }
+.howwe-ring { fill: none; stroke: var(--ink); stroke-width: 1; }
+.howwe-label { font-family: var(--f-mono); font-size: 9px; font-weight: 500; letter-spacing: 0.06em; fill: var(--paper); }
+.howwe-label:nth-of-type(1) { fill: var(--paper); }
+
+/* ----------------------------------------------------------- standards */
+.rules { padding-block: var(--s-7) var(--s-9); align-items: start; }
+.rules-toc { grid-column: 1 / 4; position: sticky; top: var(--s-5); display: grid; gap: var(--s-3); }
+.rules-toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; border-left: var(--hair); }
+.rules-toc a { display: block; padding: 4px 0 4px var(--s-3); color: var(--ink); text-decoration: none; font-size: var(--t-small); border-left: 3px solid transparent; margin-left: -2px; }
+.rules-toc a:hover { color: var(--accent); }
+.rules-toc a[aria-current] { border-left-color: var(--accent); color: var(--accent); font-weight: 500; }
+.rules-main { grid-column: 4 / 12; display: grid; gap: var(--s-8); }
+.rules-head { display: grid; gap: var(--s-4); }
+.clause { display: grid; gap: var(--s-3); scroll-margin-top: var(--s-6); border-top: var(--hair); padding-top: var(--s-4); }
+.clause h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-3); }
+.clause-n { color: var(--accent); font-size: 0.6em; }
+.clause:nth-of-type(5n+1) { border-top: 4px solid var(--lens-clm); } .clause:nth-of-type(5n+2) { border-top: 4px solid var(--lens-eng); }
+.clause:nth-of-type(5n+3) { border-top: 4px solid var(--lens-mac); } .clause:nth-of-type(5n+4) { border-top: 4px solid var(--lens-eqt); }
+.clause:nth-of-type(5n+5) { border-top: 4px solid var(--lens-com); }
+.rules-head { background: var(--tint-eqt); border: var(--hair); padding: var(--s-6); }
+.cite { background: var(--tint-eng); }
+.res-head { padding-block: var(--s-6); }
+.res-q { padding-block: var(--s-6); }
+.howwe { padding-block: var(--s-8); }
+.leaders li:nth-child(1) .leaders-n { color: var(--lens-clm); } .leaders li:nth-child(2) .leaders-n { color: var(--lens-mac); } .leaders li:nth-child(3) .leaders-n { color: var(--lens-eqt); }
+.clause ul { margin: 0; padding-left: 1.1em; display: grid; gap: var(--s-2); max-width: 62ch; }
+.hardlist li::marker { content: "✕  "; color: var(--accent); font-family: var(--f-mono); }
+.order { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; margin-top: var(--s-3); }
+.order .label { width: 100%; color: var(--ink-soft); }
+.order span:not(.label) { border: var(--hair); padding: 4px 10px; background: var(--paper-raised); font-size: var(--t-small); }
+.order span:not(.label):not(:last-child)::after { content: " →"; font-family: var(--f-mono); color: var(--ink-soft); }
+
+/* ------------------------------------------------------------- careers */
+.job { padding-block: var(--s-9); min-height: 60vh; }
+.job-card { grid-column: 2 / 8; }
+
+/* ----------------------------------------------------------------- 404 */
+.nf { padding-block: var(--s-8); align-items: center; row-gap: var(--s-5); }
+.nf-text { grid-column: 1 / 6; display: grid; gap: var(--s-4); }
+.nf-actions { display: flex; gap: var(--s-5); align-items: center; flex-wrap: wrap; }
+.nf-map { grid-column: 6 / 13; margin: 0; }
+
+/* -------------------------------------------------------------- mobile */
+@media (max-width: 899px) {
+  .dsx-title, .dsx-intro, .dsx-table-head, .dsx-panel, .dsx-std-text, .dsx-note, .dsx-ask,
+  .lab-head, .lab-main, .lab-side, .res-card, .res-sticker, .res-contents, .res-q, .res-notify,
+  .spread-left, .spread-right, .howwe-text, .howwe-fig, .rules-toc, .rules-main, .job-card, .nf-text, .nf-map { grid-column: 1 / -1; grid-row: auto; }
+  .dsx-tags { flex-direction: column; align-items: center; }
+  .dsx-string { display: none; }
+  .dsx-tags::before { content: ""; position: absolute; left: 50%; top: var(--s-6); bottom: var(--s-8); border-left: 1px dashed var(--ink); }
+  .dsx-drawer { position: relative; }
+  .lab-map .legend { position: static; justify-self: start; }
+  .lab-side-inner { position: static; }
+  .spread-left { padding-right: 0; border-right: 0; }
+  .spread-right { padding-left: 0; }
+  .team .card:nth-child(n) { margin-left: 0; }
+  .rules-toc { position: static; }
+  .res-sticker { margin-top: 0; }
+  .leaders li { grid-template-columns: 32px 1fr auto; }
+  .leaders-dots { display: none; }
+}
+
+</style>

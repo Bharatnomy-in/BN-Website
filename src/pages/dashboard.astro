@@ -1,0 +1,84 @@
+---
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import Home from '../dashboard/home';
+import fs from 'node:fs';
+import path from 'node:path';
+import '@fontsource/big-shoulders-display/700';
+import '@fontsource/big-shoulders-display/800';
+import '@fontsource/big-shoulders-display/900';
+import '@fontsource/geist/400.css';
+import '@fontsource/geist/500.css';
+import '@fontsource/geist-mono/400.css';
+
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+const u = (p: string) => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE + (p.startsWith('/') ? p : `/${p}`));
+const statsPath = path.join(process.cwd(), 'public', 'data', 'stats.json');
+const pageStats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
+const pageTitle = 'Dashboard';
+const pageDescription = 'Bharatnomy interactive dashboard workspace.';
+---
+<!doctype html>
+<html lang="en" data-base={BASE}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle} · Bharatnomy</title>
+    <meta name="description" content={pageDescription} />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <link rel="icon" href={u('/favicon.svg')} type="image/svg+xml" />
+    <meta name="theme-color" content="#F2F3EF" />
+  </head>
+  <body class="dashboard-page" data-base={BASE}>
+    <a class="dashboard-skip" href="#main">Skip to content</a>
+    <Navbar code="BN-DASH" />
+    <main id="main">
+      <Home client:load />
+    </main>
+    <Footer stats={pageStats} />
+  </body>
+</html>
+<style is:global>
+  :root {
+    --paper: #F2F3EF;
+    --paper-raised: #FBFBF8;
+    --ink: #16181C;
+    --ink-soft: #4C535C;
+    --ink-faint: rgba(22, 24, 28, 0.32);
+    --accent: #2346C7;
+    --lens-clm: #A9432F;
+    --lens-eng: #D9A21B;
+    --lens-mac: #4A7556;
+    --lens-eqt: #3F5F8F;
+    --lens-com: #7D4E7A;
+    --f-display: 'Big Shoulders Display', system-ui, sans-serif;
+    --f-text: 'Geist', system-ui, sans-serif;
+    --f-mono: 'Geist Mono', ui-monospace, monospace;
+    --t-label: .72rem;
+    --t-small: .9375rem;
+    --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px;
+    --s-7: 40px; --s-8: 56px; --s-9: 80px;
+    --grid: 40px;
+    --grid-major: rgba(22, 24, 28, .05);
+    --gutter: clamp(16px, 4vw, 40px);
+    --page-max: 1440px;
+    --hair: 1px solid var(--ink);
+    --hair-soft: 1px solid var(--ink-faint);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  html[data-theme="dark"] {
+    --dashboard-panel: #1A2028;
+    --dashboard-border: rgba(224, 232, 241, .38);
+    --dashboard-grid: rgba(224, 232, 241, .075);
+    --dashboard-code-bg: rgba(224, 232, 241, .12);
+  }
+  body.dashboard-page { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--f-text); }
+  .dashboard-skip { position: absolute; left: -999px; top: 8px; z-index: 100; padding: 10px 14px; background: var(--ink); color: white; }
+  .dashboard-skip:focus { left: 8px; }
+  .label { font-family: var(--f-mono); font-size: var(--t-label); letter-spacing: .08em; text-transform: uppercase; }
+  .soft { color: var(--ink-soft); }
+  .num { font-variant-numeric: tabular-nums; }
+  .display { font-family: var(--f-display); letter-spacing: -.012em; }
+  .mono { font-family: var(--f-mono); }
+</style>

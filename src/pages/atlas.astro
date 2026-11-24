@@ -1,0 +1,2748 @@
+---
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '@fontsource/big-shoulders-display/700';
+import '@fontsource/big-shoulders-display/800';
+import '@fontsource/big-shoulders-display/900';
+import '@fontsource/geist/400.css';
+import '@fontsource/geist/400-italic.css';
+import '@fontsource/geist/500.css';
+import '@fontsource/geist/600.css';
+import '@fontsource/geist-mono/400.css';
+import '@fontsource/geist-mono/500.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import rough from 'roughjs';
+import { geoMercator, geoPath } from 'd3-geo';
+import { scaleLinear, scaleThreshold } from 'd3-scale';
+import { quantile, extent, ticks } from 'd3-array';
+import { line as d3line, curveLinear } from 'd3-shape';
+
+// ===== Shared page helpers: formatting =====
+// Number and text formatters shared by build-time components and the Atlas.
+function fmt(v: number | null | undefined, decimals = 0): string {
+    if (v == null || Number.isNaN(v))
+        return 'no data';
+    return v.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+/** Signed value: +1.2, -0.4, 0. Uses a true minus sign. */
+function signed(v: number | null | undefined, decimals = 0): string {
+    if (v == null || Number.isNaN(v))
+        return 'no data';
+    const s = fmt(Math.abs(v), decimals);
+    if (Number(s.replace(/,/g, '')) === 0)
+        return s;
+    return (v > 0 ? '+' : '−') + s;
+}
+function withUnit(v: number | null | undefined, unit: string, decimals = 0): string {
+    if (v == null)
+        return 'no data';
+    const n = fmt(v, decimals);
+    if (!unit)
+        return n;
+    if (unit === '%')
+        return `${n}%`;
+    if (unit === 'SPI')
+        return n;
+    return `${n} ${unit}`;
+}
+function ordinal(n: number): string {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+/** "19.44° N  76.00° E" */
+function coords(lon: number, lat: number): string {
+    return `${Math.abs(lat).toFixed(2)}° ${lat >= 0 ? 'N' : 'S'}  ${Math.abs(lon).toFixed(2)}° ${lon >= 0 ? 'E' : 'W'}`;
+}
+/** "19 NOV 2026" from an ISO date. */
+function stampDate(iso: string): string {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).toUpperCase();
+}
+/** Remove em dashes from text we did not write (README titles etc.). */
+function noEmDash(s: string): string {
+    return s.replace(/\s*—\s*/g, ': ').replace(/:\s*:/g, ':');
+}
+
+
+// ===== Shared page helpers: deterministic seeds =====
+// Fixed, seeded "randomness" so every tilt and wobble is identical on every load.
+/** 32-bit FNV-1a hash of a string. */
+function hash(s: string): number {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+}
+/** Deterministic PRNG (mulberry32). */
+function rng(seed: number | string) {
+    let a = typeof seed === 'string' ? hash(seed) : seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+/** A fixed tilt in degrees within ±max, from a seed string. Never exactly 0 (0 if max is 0). */
+function tilt(seed: string, max = 3): number {
+    const r = rng(seed)();
+    const v = (r * 2 - 1) * max;
+    const min = max * 0.3;
+    const out = Math.abs(v) < min ? (v < 0 ? -min : min) : v;
+    return Math.round(out * 10) / 10;
+}
+
+
+// ===== Shared page helpers: site URLs =====
+// Every internal URL goes through u(), so the site works at a sub-path
+// (GitHub Pages: /bharatnomy-website/) or at a domain root, set by BASE_PATH.
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+const u = (p: string): string => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE + (p.startsWith('/') ? p : `/${p}`));
+const base = BASE;
+
+
+// ===== Shared page helpers: data colour scales =====
+const STOPS = {
+    warm: ['#F6EBD3', '#F0C46E', '#E07E3C', '#B53D2C', '#6B1F1D'],
+    anomaly: ['#2F5D9A', '#9DB7D5', '#EEEDE6', '#E5A07C', '#A8322A'],
+    wet: ['#EEF2E6', '#BCD9C6', '#6FB0AC', '#2C7C92', '#173F5C'],
+    wetdry: ['#8A5626', '#D6A86E', '#EEEDE6', '#7FC0B8', '#1E6E73'],
+    // brown half of dry/wet, light to dark, for "longer dry spell = darker"
+    dry: ['#F1EBDD', '#E2CDA6', '#D6A86E', '#B07B42', '#8A5626'],
+    // reversed dry/wet, for changes where a bigger number is drier (longer dry spells)
+    wetdry_rev: ['#1E6E73', '#7FC0B8', '#EEEDE6', '#D6A86E', '#8A5626'],
+    // ordinal monsoon category: large deficient .. large excess
+    category: ['#8A5626', '#D6A86E', '#EEEDE6', '#7FC0B8', '#1E6E73'],
+} as const;
+type ScaleKind = keyof typeof STOPS;
+const NO_DATA = 'url(#nodata)';
+interface Classed {
+    color: (v: number | string | null) => string | null;
+    /** legend entries, light to dark (or dry to wet) */
+    legend: {
+        color: string;
+        label: string;
+        from?: number;
+        to?: number;
+    }[];
+    breaks: number[];
+}
+const nice = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
+/** Pretty step for symmetric diverging breaks. */
+function niceStep(maxAbs: number): number {
+    const raw = maxAbs / 2.5;
+    const p = 10 ** Math.floor(Math.log10(raw));
+    const m = raw / p;
+    return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+}
+/**
+ * Build a 5-class scale.
+ * - quantile / equal: sequential metrics (values = every value currently shown)
+ * - diverging-symmetric: breaks at ±step/2 and ±1.5 step around zero
+ * - fixed: metric.fixed breaks (SPI), mapped to 5 colours
+ * - categorical: metric.categories in order
+ */
+function classify(opts: {
+    kind: ScaleKind;
+    breaks: string;
+    values: number[];
+    method?: 'quantile' | 'equal';
+    decimals?: number;
+    unit?: string;
+    fixed?: number[];
+    categories?: string[];
+}): Classed {
+    const stops = [...STOPS[opts.kind]];
+    const d = opts.decimals ?? 0;
+    const u = opts.unit === '%' ? '%' : opts.unit && opts.unit !== 'SPI' ? ` ${opts.unit}` : '';
+    if (opts.breaks === 'categorical') {
+        const cats = opts.categories ?? [];
+        const map = new Map(cats.map((c, i) => [c, stops[i]]));
+        return {
+            color: (v) => (v == null ? null : map.get(String(v)) ?? null),
+            legend: cats.map((c, i) => ({ color: stops[i], label: c })),
+            breaks: [],
+        };
+    }
+    const vals = opts.values.filter((v) => v != null && !Number.isNaN(v)).sort((a, b) => a - b);
+    let breaks: number[];
+    if (opts.breaks === 'fixed' && opts.fixed) {
+        // SPI: -2,-1.5,-1 | 1,1.5,2 → 5 classes: <=-1.5, -1.5..-1, -1..1, 1..1.5, >=1.5
+        // (the outermost ±2 break is shown in the legend text of the end classes)
+        const f = opts.fixed;
+        breaks = [f[1], f[2], f[3], f[4]];
+        const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+        return {
+            color: (v) => (v == null ? null : s(+v)),
+            legend: [
+                { color: stops[0], label: `below ${f[1]} (severe, extreme below ${f[0]})` },
+                { color: stops[1], label: `${f[1]} to ${f[2]} (moderately dry)` },
+                { color: stops[2], label: `${f[2]} to ${f[3]} (near normal)` },
+                { color: stops[3], label: `${f[3]} to ${f[4]} (moderately wet)` },
+                { color: stops[4], label: `above ${f[4]} (very wet, extreme above ${f[5]})` },
+            ],
+            breaks,
+        };
+    }
+    if (opts.breaks === 'diverging-symmetric') {
+        const maxAbs = Math.max(Math.abs(vals[0] ?? 1), Math.abs(vals[vals.length - 1] ?? 1)) || 1;
+        const step = niceStep(maxAbs);
+        breaks = [-1.5 * step, -0.5 * step, 0.5 * step, 1.5 * step];
+        const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+        const f = (x: number) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(nice(x, 2)).toLocaleString('en-IN');
+        return {
+            color: (v) => (v == null ? null : s(+v)),
+            legend: [
+                { color: stops[0], label: `below ${f(breaks[0])}${u}`, to: breaks[0] },
+                { color: stops[1], label: `${f(breaks[0])} to ${f(breaks[1])}${u}`, from: breaks[0], to: breaks[1] },
+                { color: stops[2], label: `${f(breaks[1])} to ${f(breaks[2])}${u} (near zero)`, from: breaks[1], to: breaks[2] },
+                { color: stops[3], label: `${f(breaks[2])} to ${f(breaks[3])}${u}`, from: breaks[2], to: breaks[3] },
+                { color: stops[4], label: `above ${f(breaks[3])}${u}`, from: breaks[3] },
+            ],
+            breaks,
+        };
+    }
+    // sequential
+    const lo = vals[0] ?? 0, hi = vals[vals.length - 1] ?? 1;
+    if (opts.method === 'equal') {
+        const w = (hi - lo) / 5;
+        breaks = [1, 2, 3, 4].map((i) => nice(lo + w * i, d));
+    }
+    else {
+        breaks = [0.2, 0.4, 0.6, 0.8].map((p) => nice(quantile(vals, p) ?? lo, d));
+    }
+    // collapse duplicate breaks (many equal values) so classes stay ordered
+    for (let i = 1; i < breaks.length; i++)
+        if (breaks[i] <= breaks[i - 1])
+            breaks[i] = breaks[i - 1] + 10 ** -d;
+    const s = scaleThreshold<number, string>().domain(breaks).range(stops);
+    const n = (x: number) => x.toLocaleString('en-IN', { maximumFractionDigits: d, minimumFractionDigits: d });
+    const edges = [lo, ...breaks, hi];
+    return {
+        color: (v) => (v == null ? null : s(+v)),
+        legend: stops.map((c, i) => ({
+            color: c,
+            label: i === 0 ? `under ${n(edges[1])}${u}` : i === 4 ? `${n(edges[4])}${u} or more` : `${n(edges[i])} to under ${n(edges[i + 1])}${u}`,
+            from: edges[i], to: edges[i + 1],
+        })),
+        breaks,
+    };
+}
+/** Darkest usable stop of a scale (for compare lines etc.). */
+const darkEnd = (k: ScaleKind) => STOPS[k][4];
+
+
+// ===== Shared page helpers: hand-drawn SVG sketches =====
+const gen = rough.generator();
+/** Round every number in a path string to 1 decimal (keeps inline SVG small). */
+const tidy = (d: string, dec = 1) => d.replace(/-?\d+\.\d+/g, (n) => (Math.round(+n * 10 ** dec) / 10 ** dec).toString());
+interface Frame {
+    width: number;
+    height: number;
+    project: (p: [
+        number,
+        number
+    ]) => [
+        number,
+        number
+    ];
+}
+function allCoords(g: any, out: Position[] = []): Position[] {
+    if (!g)
+        return out;
+    if (g.type === 'FeatureCollection')
+        g.features.forEach((f: any) => allCoords(f.geometry, out));
+    else if (g.type === 'GeometryCollection')
+        g.geometries.forEach((x: any) => allCoords(x, out));
+    else if (g.type === 'Feature')
+        allCoords(g.geometry, out);
+    else if (g.type === 'Point')
+        out.push(g.coordinates);
+    else if (g.type === 'MultiPoint' || g.type === 'LineString')
+        out.push(...g.coordinates);
+    else if (g.type === 'Polygon' || g.type === 'MultiLineString')
+        g.coordinates.forEach((r: Position[]) => out.push(...r));
+    else if (g.type === 'MultiPolygon')
+        g.coordinates.forEach((p: Position[][]) => p.forEach((r) => out.push(...r)));
+    return out;
+}
+function frameFor(fc: FeatureCollection, width: number, height: number, pad = 12): Frame {
+    // Fit to the coordinates as points: d3-geo is spherical and treats rings with
+    // the "wrong" winding (RFC 7946 order) as the whole globe minus the shape.
+    const proj = geoMercator().fitExtent([[pad, pad], [width - pad, height - pad]], { type: 'MultiPoint', coordinates: allCoords(fc) } as any);
+    return { width, height, project: (p) => proj(p) as [
+            number,
+            number
+        ] };
+}
+function rings(g: Geometry): Position[][] {
+    if (g.type === 'Polygon')
+        return [g.coordinates[0]];
+    if (g.type === 'MultiPolygon')
+        return g.coordinates.map((p) => p[0]);
+    return [];
+}
+interface SketchedDistrict {
+    lgd: string;
+    name: string;
+    x: number;
+    y: number;
+    outline: string[];
+    hatch: string[];
+    plain: string;
+}
+interface SketchOpts {
+    frame: Frame;
+    /** value per lgd; districts without a value get outline only */
+    values?: Record<string, number | null>;
+    /** value range mapped to hachure gap (sparse at lo, dense at hi) */
+    range?: [
+        number,
+        number
+    ];
+    gap?: [
+        number,
+        number
+    ]; // [sparse, dense] px, default [14, 2.5]
+    roughness?: number;
+    seedSalt?: number;
+    hatchWeight?: number;
+}
+function hachureGap(v: number, range: [
+    number,
+    number
+], gap: [
+    number,
+    number
+] = [14, 2.5]): number {
+    const t = Math.max(0, Math.min(1, (v - range[0]) / (range[1] - range[0] || 1)));
+    // interpolate line density (1/gap), not gap, so darkness grows evenly with the value
+    return 1 / (1 / gap[0] + (1 / gap[1] - 1 / gap[0]) * t);
+}
+function sketchDistricts(fc: FeatureCollection, o: SketchOpts): SketchedDistrict[] {
+    const path = geoPath();
+    const out: SketchedDistrict[] = [];
+    for (const f of fc.features as Feature[]) {
+        const p = f.properties as {
+            lgd: string;
+            name: string;
+            cx: number;
+            cy: number;
+        };
+        const seed = Number(p.lgd) + (o.seedSalt ?? 0) * 1000;
+        const polys = rings(f.geometry).map((r) => r.map((c) => o.frame.project(c as [
+            number,
+            number
+        ])));
+        if (polys.some((r) => r.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))))
+            throw new Error(`sketch: non-finite projection for ${p.name}`);
+        const v = o.values?.[p.lgd];
+        const outline: string[] = [];
+        const hatch: string[] = [];
+        polys.forEach((pts, i) => {
+            if (pts.length < 3)
+                return;
+            const s = seed + i * 7;
+            for (const pi of gen.toPaths(gen.polygon(pts, { roughness: o.roughness ?? 0.75, bowing: 0.6, stroke: '#16181C', strokeWidth: 1, seed: s, disableMultiStroke: true })))
+                outline.push(tidy(pi.d));
+            if (v != null && o.range) {
+                const g = gen.polygon(pts, {
+                    stroke: 'none', fill: '#16181C', fillStyle: 'hachure', hachureAngle: -41,
+                    hachureGap: hachureGap(v, o.range, o.gap), fillWeight: o.hatchWeight ?? 0.7,
+                    roughness: 0.4, seed: s + 3, disableMultiStrokeFill: true,
+                });
+                for (const pi of gen.toPaths(g))
+                    if (pi.fill === 'none' || pi.stroke !== 'none')
+                        hatch.push(tidy(pi.d, 0));
+            }
+        });
+        const [x, y] = o.frame.project([p.cx, p.cy]);
+        const plain = tidy(path({ type: 'MultiPolygon', coordinates: polys.map((r) => [r]) } as any) ?? '');
+        out.push({ lgd: String(p.lgd), name: p.name, x, y, outline, hatch, plain });
+    }
+    return out;
+}
+/** Rough outlines of every feature (e.g. India's states), one path string each. */
+function sketchOutlines(fc: FeatureCollection, frame: Frame, o: {
+    roughness?: number;
+    seedSalt?: number;
+} = {}) {
+    return (fc.features as Feature[]).map((f, k) => {
+        const props = (f.properties ?? {}) as Record<string, any>;
+        const d: string[] = [];
+        rings(f.geometry).forEach((r, i) => {
+            const pts = r.map((c) => frame.project(c as [
+                number,
+                number
+            ]));
+            if (pts.length < 3)
+                return;
+            for (const pi of gen.toPaths(gen.polygon(pts, { roughness: o.roughness ?? 0.6, bowing: 0.5, stroke: '#16181C', strokeWidth: 1, seed: 7000 + k * 31 + i + (o.seedSalt ?? 0), disableMultiStroke: true })))
+                d.push(tidy(pi.d));
+        });
+        return { props, d: d.join(' ') };
+    });
+}
+/** A single rough line through points (the "pen line"). */
+function roughLine(points: [
+    number,
+    number
+][], seed: number, roughness = 0.4): string {
+    return gen.toPaths(gen.curve(points, { roughness, bowing: 0.5, stroke: '#2346C7', strokeWidth: 2, seed, disableMultiStroke: true })).map((p) => tidy(p.d)).join(' ');
+}
+/** A rough circle outline, e.g. for waypoints or lens circles. */
+function roughCircle(x: number, y: number, d: number, seed: number, roughness = 0.8): string {
+    return gen.toPaths(gen.circle(x, y, d, { roughness, stroke: '#16181C', strokeWidth: 1, seed })).map((p) => tidy(p.d)).join(' ');
+}
+
+
+// ===== Shared page helpers: trend charts =====
+interface TrendSeries {
+    label: string;
+    values: (number | null)[];
+    /** 'ink' main line, 'accent' pen line, or a dash pattern for compares */
+    style?: 'ink' | 'accent' | 'faint';
+    dash?: string;
+    color?: string;
+}
+interface TrendOpts {
+    years: number[];
+    series: TrendSeries[];
+    width?: number;
+    height?: number;
+    unit?: string;
+    decimals?: number;
+    baseline?: [
+        number,
+        number
+    ]; // shaded normal period
+    highlight?: number; // marked year
+    rolling?: number; // rolling mean window (applied to series[0])
+    zeroLine?: boolean;
+    title?: string; // accessible title
+    desc?: string;
+}
+const escTrend = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+function rollingMean(v: (number | null)[], w: number): (number | null)[] {
+    return v.map((_, i) => {
+        if (i < w - 1)
+            return null;
+        const win = v.slice(i - w + 1, i + 1).filter((x): x is number => x != null);
+        return win.length === w ? win.reduce((a, b) => a + b, 0) / w : null;
+    });
+}
+function renderTrend(o: TrendOpts): string {
+    const W = o.width ?? 560, H = o.height ?? 220;
+    const m = { t: 24, r: 12, b: 26, l: 40 };
+    const years = o.years;
+    const all = o.series.flatMap((s) => s.values).filter((v): v is number => v != null);
+    let [lo, hi] = extent(all) as [
+        number,
+        number
+    ];
+    if (o.zeroLine) {
+        lo = Math.min(lo, 0);
+        hi = Math.max(hi, 0);
+    }
+    const padY = (hi - lo) * 0.08 || 1;
+    const x = scaleLinear().domain([years[0], years[years.length - 1]]).range([m.l, W - m.r]);
+    const y0 = lo >= 0 && lo - padY < 0 ? 0 : lo - padY; // counts never go below zero
+    const y = scaleLinear().domain([y0, hi + padY]).range([H - m.b, m.t]).nice(4);
+    const d = o.decimals ?? 0;
+    const yt = y.ticks(4);
+    const xt = ticks(Math.ceil(years[0] / 10) * 10, Math.floor(years[years.length - 1] / 10) * 10, 8).filter((t) => t % 10 === 0);
+    const mk = (vals: (number | null)[]) => d3line<number | null>().defined((v) => v != null).x((_, i) => x(years[i])).y((v) => y(v as number)).curve(curveLinear)(vals) ?? '';
+    const parts: string[] = [];
+    parts.push(`<svg class="trend" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${escTrend(o.title ?? 'Trend chart')}">`);
+    if (o.desc)
+        parts.push(`<desc>${escTrend(o.desc)}</desc>`);
+    // baseline band
+    if (o.baseline) {
+        const [a, b] = o.baseline;
+        parts.push(`<rect class="trend-band" x="${x(Math.max(a, years[0])).toFixed(1)}" y="${m.t}" width="${(x(Math.min(b, years[years.length - 1])) - x(Math.max(a, years[0]))).toFixed(1)}" height="${H - m.b - m.t}"/>`);
+        parts.push(`<text class="trend-bandlabel" x="${(x(Math.max(a, years[0])) + 4).toFixed(1)}" y="${m.t + 10}">NORMAL ${a}–${b}</text>`);
+    }
+    // y grid + ticks
+    for (const t of yt) {
+        parts.push(`<line class="trend-grid" x1="${m.l}" x2="${W - m.r}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>`);
+        parts.push(`<text class="trend-tick" x="${m.l - 6}" y="${(y(t) + 3).toFixed(1)}" text-anchor="end">${t.toLocaleString('en-IN', { maximumFractionDigits: Math.max(0, d) })}</text>`);
+    }
+    if (o.zeroLine && lo < 0 && hi > 0)
+        parts.push(`<line class="trend-zero" x1="${m.l}" x2="${W - m.r}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>`);
+    // x ticks
+    parts.push(`<line class="trend-axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`);
+    for (const t of xt) {
+        parts.push(`<line class="trend-axis" x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${H - m.b}" y2="${H - m.b + 4}"/>`);
+        parts.push(`<text class="trend-tick" x="${x(t).toFixed(1)}" y="${H - m.b + 15}" text-anchor="middle">${t}</text>`);
+    }
+    if (o.unit)
+        parts.push(`<text class="trend-tick trend-unit" x="0" y="10">${escTrend(o.unit.toUpperCase())}</text>`);
+    // highlight year
+    if (o.highlight != null && years.includes(o.highlight)) {
+        const hx = x(o.highlight).toFixed(1);
+        parts.push(`<line class="trend-hl" x1="${hx}" x2="${hx}" y1="${m.t}" y2="${H - m.b}"/>`);
+        parts.push(`<text class="trend-hllabel" x="${hx}" y="${m.t - 6}" text-anchor="end">${o.highlight}</text>`);
+    }
+    // series
+    o.series.forEach((s, i) => {
+        const cls = s.style === 'accent' ? 'trend-pen' : s.style === 'faint' ? 'trend-faint' : 'trend-ink';
+        const extra = `${s.dash ? ` stroke-dasharray="${s.dash}"` : ''}${s.color ? ` style="stroke:${s.color}"` : ''}`;
+        parts.push(`<path class="${cls}" d="${mk(s.values)}"${extra}><title>${escTrend(s.label)}</title></path>`);
+        if (i === 0 && o.rolling)
+            parts.push(`<path class="trend-roll" d="${mk(rollingMean(s.values, o.rolling))}"><title>${o.rolling}-year rolling mean</title></path>`);
+        if (i === 0 && o.highlight != null) {
+            const k = years.indexOf(o.highlight);
+            const v = s.values[k];
+            if (v != null)
+                parts.push(`<circle class="trend-dot" cx="${x(o.highlight).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.5"/>`);
+        }
+    });
+    parts.push('</svg>');
+    return parts.join('');
+}
+
+
+// ===== Shared page helpers: dataset README formatting =====
+interface Section {
+    title: string;
+    body: string;
+}
+const escMarkdown = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function inline(s: string): string {
+    let t = escMarkdown(noEmDash(s));
+    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) => {
+        const ext = /^https?:/.test(url);
+        return `<a href="${url}"${ext ? ' class="ext"' : ''}>${txt}</a>`;
+    });
+    return t;
+}
+function block(md: string): string {
+    const lines = md.split('\n');
+    const out: string[] = [];
+    let i = 0;
+    while (i < lines.length) {
+        const l = lines[i];
+        if (!l.trim()) {
+            i++;
+            continue;
+        }
+        if (/^\|/.test(l)) {
+            const rows: string[][] = [];
+            while (i < lines.length && /^\|/.test(lines[i])) {
+                if (!/^\|[\s:|-]+\|$/.test(lines[i].trim()))
+                    rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+                i++;
+            }
+            const [head, ...body] = rows;
+            out.push(`<div class="md-table"><table><thead><tr>${head.map((h) => `<th scope="col">${inline(h)}</th>`).join('')}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+            continue;
+        }
+        if (/^[-*] /.test(l)) {
+            const items: string[] = [];
+            while (i < lines.length && (/^[-*] /.test(lines[i]) || /^\s{2,}\S/.test(lines[i]))) {
+                if (/^[-*] /.test(lines[i]))
+                    items.push(lines[i].replace(/^[-*] /, ''));
+                else
+                    items[items.length - 1] += ' ' + lines[i].trim();
+                i++;
+            }
+            out.push(`<ul>${items.map((it) => `<li>${inline(it)}</li>`).join('')}</ul>`);
+            continue;
+        }
+        const para: string[] = [];
+        while (i < lines.length && lines[i].trim() && !/^[|#]|^[-*] /.test(lines[i]))
+            para.push(lines[i++].trim());
+        if (para.length)
+            out.push(`<p>${inline(para.join(' '))}</p>`);
+        else
+            i++;
+    }
+    return out.join('\n');
+}
+/** Split a README into its title, first paragraph and ## sections (raw md). */
+function parseReadme(md: string) {
+    const title = noEmDash((md.match(/^# (.+)$/m)?.[1] ?? '').replace(/\s*—\s*Maharashtra$/, ''));
+    const parts = md.split(/^## /m);
+    const intro = parts[0].replace(/^# .+$/m, '').trim();
+    const sections: Record<string, string> = {};
+    for (const p of parts.slice(1)) {
+        const nl = p.indexOf('\n');
+        sections[p.slice(0, nl).trim()] = p.slice(nl + 1).trim();
+    }
+    return { title, intro, sections };
+}
+/** Rows of the first markdown table in a section. */
+function tableRows(md: string): string[][] {
+    return md.split('\n').filter((l) => /^\|/.test(l) && !/^\|[\s:|-]+\|$/.test(l.trim()))
+        .map((l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())).slice(1);
+}
+/** Bullet items of a section as raw strings. */
+function bullets(md: string): string[] {
+    return md.split('\n').filter((l) => /^[-*] /.test(l)).map((l) => l.replace(/^[-*] /, ''));
+}
+
+
+// ===== Shared page helpers: dataset loading =====
+const DATA_DIR = path.join(process.cwd(), 'public', 'data');
+function read<T>(rel: string): T {
+    const f = path.join(DATA_DIR, rel);
+    if (!fs.existsSync(f))
+        throw new Error(`Missing ${rel}. Run \`npm run data\` first.`);
+    return JSON.parse(fs.readFileSync(f, 'utf8')) as T;
+}
+interface District {
+    lgd: string;
+    name: string;
+    census2011: string;
+    cx: number;
+    cy: number;
+}
+interface MetricFile {
+    metric: string;
+    dataset: string;
+    label: string;
+    unit: string;
+    years: number[];
+    values: Record<string, (number | string | null)[]>;
+    state_mean: (number | null)[] | null;
+    domain: (number | string)[];
+    p05_p95: [
+        number,
+        number
+    ] | null;
+    source: string;
+    updated: string;
+}
+interface DatasetMeta {
+    slug: string;
+    code: string;
+    lens: string;
+    folder: string;
+    path: string;
+    title: string;
+    defaultMetric: string;
+    source: string;
+    sourceUrl: string;
+    rows: number;
+    districts: number;
+    columns: number;
+    first_year: number;
+    last_year: number;
+    csv_kb: number;
+    json_kb: number;
+    metrics: string[];
+}
+interface Stats {
+    district_count: number;
+    temp_first_year: number;
+    temp_last_year: number;
+    temp_year_span: number;
+    rain_first_year: number;
+    rain_last_year: number;
+    decade_first: string;
+    decade_last: string;
+    p90_days_first: number;
+    p90_days_last: number;
+    hottest_change_district: string;
+    hottest_change_district_lgd: string;
+    hottest_change_days: number;
+    districts_warmer_last_decade: number;
+    monsoon_latest_avg_departure_pct: number;
+    monsoon_latest_deficient: number;
+    monsoon_latest_excess: number;
+    state_centroid: [
+        number,
+        number
+    ];
+    states_mapped: string[];
+    india_boundaries: {
+        states_2011: number;
+        commit: string;
+    };
+    data: {
+        repo: string;
+        commit: string;
+        short: string;
+        date: string;
+        built: string;
+    };
+    ticker: {
+        lgd: string | null;
+        year: number;
+        text: string;
+    }[];
+    datasets: DatasetMeta[];
+}
+interface DecadeFrames {
+    metric: string;
+    decades: {
+        label: string;
+        start: number;
+        first: number;
+        last: number;
+        years: number;
+        complete: boolean;
+    }[];
+    values: Record<string, (number | null)[]>;
+}
+let _stats: Stats | undefined;
+const stats = (): Stats => (_stats ??= read<Stats>('stats.json'));
+const districts = (): District[] => read<District[]>('districts.json');
+const districtsGeo = (): GeoJSON.FeatureCollection => read('districts.geojson');
+const stateGeo = (): GeoJSON.FeatureCollection => read('state.geojson');
+const indiaGeo = (): GeoJSON.FeatureCollection => read('india-states.geojson');
+const metricFile = (dataset: string, metric: string): MetricFile => read(`${dataset}/${metric}.json`);
+const decadeFrames = (): DecadeFrames => read('temperature/decades_days_tmax_above_p90.json');
+const readme = (dataset: string): string => fs.readFileSync(path.join(DATA_DIR, dataset, 'README.md'), 'utf8');
+/** Values for one year as { lgd: value }. */
+function yearSlice(m: MetricFile, year: number): Record<string, number | string | null> {
+    const i = m.years.indexOf(year);
+    return Object.fromEntries(Object.entries(m.values).map(([k, v]) => [k, i < 0 ? null : v[i]]));
+}
+
+
+// ===== Inline copy: src/config/metrics.mjs =====
+// Metric registry (MAP.md §3). One entry per column shown in the Atlas.
+// Adding a metric = adding an entry here and running `npm run data`.
+//
+// scale:  warm | anomaly | wet | wetdry | dry | category   (see src/lib/scales.ts)
+// breaks: quantile | diverging-symmetric | fixed | categorical
+
+/** @typedef {{ id:string, dataset:string, label:string, short:string, unit:string,
+ *   scale:string, breaks:string, help:string, caveat?:string, fixed?:number[],
+ *   categories?:string[], decimals:number, higherIs?:string, lowerIs?:string }} Metric */
+
+const GRID_TEMP = 'A 1-degree grid cell is about 110 km wide, so it smooths out the hottest afternoons. Read this as a trend, not as a station count.';
+const SMALL = 'Mumbai City and Mumbai Suburban rest on very few grid cells, so their figures describe the surrounding area as much as the district.';
+
+/** @type {Metric[]} */
+const METRICS = [
+  // ---------------------------------------------------------------- temperature
+  {
+    id: 'days_tmax_above_p90', dataset: 'temperature',
+    label: 'Unusually hot days (above the 1991 to 2020 90th percentile)', short: 'Hot days',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'hottest', lowerIs: 'least hot',
+    help: "Days when the maximum temperature beat the district's own 90th percentile for that time of year, measured over 1991 to 2020. It does not depend on a fixed threshold, so it is the fairest way to compare change over time.",
+  },
+  {
+    id: 'nights_tmin_above_p90', dataset: 'temperature',
+    label: 'Unusually warm nights', short: 'Warm nights',
+    unit: 'nights', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'warmest nights', lowerIs: 'coolest nights',
+    help: "Nights when the minimum temperature beat the district's own 1991 to 2020 90th percentile for that time of year.",
+  },
+  {
+    id: 'tmax_mean_anomaly_c', dataset: 'temperature',
+    label: 'Average daily maximum vs 1981 to 2010 (°C)', short: 'Tmax anomaly',
+    unit: '°C', scale: 'anomaly', breaks: 'diverging-symmetric', decimals: 2,
+    higherIs: 'warmest against normal', lowerIs: 'coolest against normal',
+    help: "The year's average daily maximum minus the district's 1981 to 2010 average. Above zero is hotter than normal.",
+  },
+  {
+    id: 'tmax_mean_c', dataset: 'temperature',
+    label: 'Average daily maximum (°C)', short: 'Avg max',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The average of every daily maximum temperature in the year.',
+  },
+  {
+    id: 'tmin_mean_c', dataset: 'temperature',
+    label: 'Average daily minimum (°C)', short: 'Avg min',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'warmest', lowerIs: 'coolest',
+    help: 'The average of every daily minimum temperature in the year.',
+  },
+  {
+    id: 'tmax_mean_mar_may_c', dataset: 'temperature',
+    label: 'Summer (March to May) average maximum (°C)', short: 'Summer max',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The average daily maximum across March, April and May.',
+  },
+  {
+    id: 'tmax_highest_c', dataset: 'temperature',
+    label: 'Hottest day of the year (°C)', short: 'Hottest day',
+    unit: '°C', scale: 'warm', breaks: 'quantile', decimals: 1,
+    higherIs: 'hottest', lowerIs: 'coolest',
+    help: 'The highest daily maximum of the year, on the district average.',
+    caveat: GRID_TEMP,
+  },
+  {
+    id: 'days_tmax_40c_or_more', dataset: 'temperature',
+    label: 'Days at 40 °C or above', short: '40 °C days',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'hottest', lowerIs: 'least hot',
+    help: 'Days when the district-average maximum reached 40 °C or more.',
+    caveat: GRID_TEMP,
+  },
+  {
+    id: 'heatwave_days', dataset: 'temperature',
+    label: 'Heat wave days (IMD criteria)', short: 'Heat waves',
+    unit: 'days', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'most heat wave days', lowerIs: 'fewest heat wave days',
+    help: "Days meeting IMD's heat wave rule for the plains: 40 °C or more and at least 4.5 °C above the 1991 to 2020 normal, or 45 °C or more.",
+    caveat: "IMD's rule is written for weather stations. On a 1-degree grid the hottest afternoons are smoothed out, so these counts are far lower than station counts and are best read as a trend.",
+  },
+
+  // ------------------------------------------------------------------- rainfall
+  {
+    id: 'rainfall_jun_sep_departure_pct', dataset: 'rainfall',
+    label: 'Monsoon rainfall vs 1971 to 2020 average (%)', short: 'Monsoon departure',
+    unit: '%', scale: 'wetdry', breaks: 'diverging-symmetric', decimals: 1,
+    higherIs: 'wettest against normal', lowerIs: 'driest against normal',
+    help: "June to September rainfall compared with the district's 1971 to 2020 average, IMD's long period average. Zero is a normal monsoon.",
+  },
+  {
+    id: 'rainfall_annual_mm', dataset: 'rainfall',
+    label: 'Annual rainfall (mm)', short: 'Annual rain',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'Total rainfall in the calendar year.',
+    caveat: "IMD's grid gives Pune an exceptional 2005 (4,342 mm against a 1971 to 2020 average of 1,011 mm). We keep it as IMD published it.",
+  },
+  {
+    id: 'rainfall_jun_sep_mm', dataset: 'rainfall',
+    label: 'Monsoon (June to September) rainfall (mm)', short: 'Monsoon rain',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'Total rainfall from June to September, the south-west monsoon.',
+  },
+  {
+    id: 'rainy_days_2_5mm', dataset: 'rainfall',
+    label: 'Rainy days (2.5 mm or more)', short: 'Rainy days',
+    unit: 'days', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'most rainy days', lowerIs: 'fewest rainy days',
+    help: "Days with 2.5 mm of rain or more, IMD's definition of a rainy day.",
+  },
+  {
+    id: 'heavy_rain_days_64_5mm', dataset: 'rainfall',
+    label: 'Heavy rain days (64.5 mm or more)', short: 'Heavy rain days',
+    unit: 'days', scale: 'wet', breaks: 'quantile', decimals: 0,
+    higherIs: 'most heavy rain days', lowerIs: 'fewest heavy rain days',
+    help: "Days with 64.5 mm or more on the district average, IMD's heavy rain threshold.",
+    caveat: 'Counted on the district average, so a downpour over part of a large district counts less than at a single rain gauge.',
+  },
+  {
+    id: 'rx1day_mm', dataset: 'rainfall',
+    label: 'Wettest day of the year (mm)', short: 'Wettest day',
+    unit: 'mm', scale: 'wet', breaks: 'quantile', decimals: 1,
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: 'The highest one-day rainfall of the year, on the district average.',
+  },
+  {
+    id: 'monsoon_longest_dry_spell_days', dataset: 'rainfall',
+    label: 'Longest monsoon dry spell (days)', short: 'Dry spell',
+    unit: 'days', scale: 'dry', breaks: 'quantile', decimals: 0,
+    higherIs: 'longest dry spell', lowerIs: 'shortest dry spell',
+    help: 'The longest run of days under 2.5 mm between June and September. This is our definition; IMD has no fixed district rule.',
+  },
+  {
+    id: 'spi_jun_sep', dataset: 'rainfall',
+    label: 'Monsoon drought index (SPI)', short: 'SPI',
+    unit: 'SPI', scale: 'wetdry', breaks: 'fixed', decimals: 2,
+    fixed: [-2, -1.5, -1, 1, 1.5, 2],
+    higherIs: 'wettest', lowerIs: 'driest',
+    help: "June to September rainfall placed on the district's 1971 to 2020 distribution. Below -1 is moderately dry, below -1.5 severely dry, below -2 extremely dry.",
+  },
+  {
+    id: 'monsoon_category', dataset: 'rainfall',
+    label: 'Monsoon category (IMD)', short: 'Category',
+    unit: '', scale: 'category', breaks: 'categorical', decimals: 0,
+    categories: ['large deficient', 'deficient', 'normal', 'excess', 'large excess'],
+    help: "IMD's class for the June to September departure from the 1971 to 2020 average: large deficient (-60 to -99%), deficient (-20 to -59%), normal (-19 to +19%), excess (+20 to +59%), large excess (+60% or more).",
+  },
+];
+
+const SMALL_DISTRICT_NOTE = SMALL;
+
+
+// ===== Inline copy: src/config/data.mjs =====
+// Where the site's data comes from. Plain JS (not TS) so that
+// scripts/build-data.mjs can import it on any Node 18+ without a TS loader.
+//
+// The data repo is the Bharatnomy *front* repo: the cleaned, per-state copy of
+// the warehouse, already joined on LGD codes. To move to newer data, change
+// DATA_REF to a newer commit of DATA_REPO and run `npm run data`.
+
+const DATA_REPO = 'https://github.com/sarveshkant2003-afk/bharatnomy-front';
+const DATA_REF = '7d9978fd6699bf5b7c83328f57bb257d099ce98a';
+
+// Set DATA_LOCAL=/path/to/a/checkout to build from a local copy instead of
+// cloning (offline work). The commit stamp is then read from that checkout.
+
+// The site covers India. Today only Maharashtra has district data; adding a
+// state means adding it here once its data is in the front repo.
+const STATE = { slug: 'maharashtra', name: 'Maharashtra', lgd: '27' };
+const STATES_MAPPED = [STATE];
+
+// All-India state outlines for the home page, dissolved from the Census 2011
+// district map (DataMeet) kept in the warehouse. Boundaries are those of 2011.
+const INDIA_BOUNDARIES = {
+  repo: 'https://github.com/sarveshkant2003-afk/bharatnomy-data',
+  ref: 'cd7ce2d673103cc0e606e3cc37e49a9ae75f849a',
+  dir: '_sources/datameet-maps/raw',
+  file: 'datameet-maps_census2011-districts_2011.shp',
+  stateField: 'ST_NM',
+};
+
+// Paths inside the data repo.
+const BOUNDARIES_PATH = `states/${STATE.slug}/districts.geojson`;
+
+// The only two datasets on the site. Adding a dataset = one entry here plus
+// its metrics in metrics.mjs.
+const DATASETS = [
+  {
+    slug: 'temperature',
+    code: 'BN-DATA-CLM-001',
+    lens: 'Climate adaptation & resilience',
+    folder: 'CLM_temperature-indices_1951-to-2024_MH_BNY_DIST',
+    path: `states/${STATE.slug}/climate-adaptation/CLM_temperature-indices_1951-to-2024_MH_BNY_DIST`,
+    title: 'Temperature and heat by district',
+    defaultMetric: 'days_tmax_above_p90',
+    source: 'IMD gridded daily temperature (1° grid)',
+    sourceUrl: 'https://imdpune.gov.in/lrfindex.php',
+  },
+  {
+    slug: 'rainfall',
+    code: 'BN-DATA-CLM-002',
+    lens: 'Climate adaptation & resilience',
+    folder: 'CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST',
+    path: `states/${STATE.slug}/climate-adaptation/CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST`,
+    title: 'Rainfall and monsoon by district',
+    defaultMetric: 'rainfall_jun_sep_departure_pct',
+    source: 'IMD gridded daily rainfall (0.25° grid)',
+    sourceUrl: 'https://imdpune.gov.in/lrfindex.php',
+  },
+];
+
+// Page-local render helpers. These are intentionally kept in the page file.
+const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+const sticker = (text: string, o: any = {}) => {
+  const tone = o.tone ?? 'paper', seed = o.seed ?? text, deg = tilt(seed, o.max ?? 1);
+  return `<span class="sticker sticker--${escapeHtml(tone)}${o.dashed ? ' sticker--dashed' : ''}${o.class ? ' ' + escapeHtml(o.class) : ''}" style="--tilt:${deg}deg">${o.tape ? '<span class="tape" aria-hidden="true"></span>' : ''}${escapeHtml(text)}</span>`;
+};
+const button = (label: string, o: any = {}) => {
+  const cls = `btn${o.primary ? ' btn--primary' : ''}${o.class ? ' ' + o.class : ''}`;
+  const arrow = o.arrow === undefined ? '→' : o.arrow;
+  const attrs = `${o.id ? ` id="${escapeHtml(o.id)}"` : ''}${o.download ? ' download' : ''}${o.type ? ` type="${escapeHtml(o.type)}"` : ''}${o.disabled ? ' disabled' : ''}`;
+  return o.href ? `<a href="${escapeHtml(o.href)}" class="${cls}"${attrs}><span>${label}</span>${arrow ? `<span class="btn-arrow" aria-hidden="true">${escapeHtml(arrow)}</span>` : ''}</a>` : `<button class="${cls}"${attrs}><span>${label}</span>${arrow ? `<span class="btn-arrow" aria-hidden="true">${escapeHtml(arrow)}</span>` : ''}</button>`;
+};
+const panel = (title: string, rows: any[], o: any = {}) => `<section class="panel${o.class ? ' ' + o.class : ''}"${o.id ? ` id="${escapeHtml(o.id)}"` : ''} aria-label="${escapeHtml(title)}"${o.tone ? ` data-tone="${escapeHtml(o.tone)}"` : ''}><span class="panel-plus" aria-hidden="true">+</span><h3 class="label panel-title">${escapeHtml(title)}</h3><dl class="panel-rows">${rows.map((r) => `<div class="panel-row"><dt class="label soft">${escapeHtml(r.label)}</dt><dd class="panel-val num">${escapeHtml(r.value)}${r.note ? `<span class="label soft panel-note">${escapeHtml(r.note)}</span>` : ''}</dd></div>`).join('')}</dl>${o.foot ? `<p class="label soft panel-foot">${escapeHtml(o.foot)}</p>` : ''}</section>`;
+const ticker = (facts: string[], o: any = {}) => { const label = o.label ?? 'Latest readings', speed = o.speed ?? 90, dur = Math.round(facts.join('   ').length / 120 * speed); const list = facts.map((f) => `<li>${escapeHtml(f)}</li>`).join(''); return `<section class="ticker" aria-label="${escapeHtml(label)}" tabindex="0" style="--ticker-dur:${dur}s"><div class="ticker-track"><ul class="ticker-list label">${list}</ul><ul class="ticker-list label ticker-dup" aria-hidden="true">${list}</ul></div></section>`; };
+const margin = (body: string, o: any = {}) => `<aside class="mnote${o.class ? ' ' + o.class : ''}"${o.to ? ` data-leader-to="${escapeHtml(o.to)}"` : ''}${o.at ? ` data-leader-at="${escapeHtml(o.at)}"` : ''}>${o.label ? `<span class="label mnote-label">${escapeHtml(o.label)}</span>` : ''}${body}</aside>`;
+const highlighter = (text: string, seed = 'hl') => {
+  const words = text.split(/\s+/);
+  const mark = (k: number) => { const r = rng(`${seed}-${k}`); const top = Array.from({ length: 5 }, (_, i) => [i * 25, 4 + r() * 4]); const bot = Array.from({ length: 5 }, (_, i) => [100 - i * 25, 16 + r() * 3.5]); return 'M' + [...top, ...bot].map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L') + ' Z'; };
+  return `<span class="hl-group">${words.map((w, i) => `<span class="hl${i < words.length - 1 ? ' hl--join' : ''}"><svg class="hl-mark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"><path d="${mark(i)}" /></svg><span class="hl-text">${escapeHtml(w)}</span></span>${i < words.length - 1 ? ' ' : ''}`).join('')}</span>`;
+};
+const indexCard = (body: string, o: any = {}) => { const seed = o.seed ?? o.title ?? 'card', tiltDeg = tilt(seed, o.max ?? 0.8), Tag = o.as ?? 'article', H = o.titleTag ?? 'h3'; return `<${Tag} class="card${o.class ? ' ' + escapeHtml(o.class) : ''}" data-tone="${escapeHtml(o.tone ?? '')}" style="--tilt:${tiltDeg}deg">${o.tape ? '<span class="tape tape--card" aria-hidden="true"></span>' : ''}${o.title ? `<${H} class="display card-title">${escapeHtml(o.title)}</${H}>` : ''}${o.meta ? `<p class="label card-meta">${escapeHtml(o.meta)}</p>` : ''}<div class="card-body">${body}</div></${Tag}>`; };
+const lensTab = (o: any) => { const roman = ['I','II','III','IV','V'][o.n - 1]; const first = o.name.split(' ')[0].replace(/&$/, ''); return `<article class="lens lens--${o.lens}${o.class ? ' ' + o.class : ''}" style="--tab-offset:${(o.n - 1) * 19}%"><div class="lens-tab"><span class="label">${roman}</span><span class="lens-tab-name">${escapeHtml(first)}</span></div><div class="lens-page">${sticker(o.status, { tone: o.n === 1 ? o.lens : 'paper', seed: `lens-${o.n}`, class: 'lens-status' })}<h3 class="display t-l lens-name">${escapeHtml(o.name)}</h3><p class="lens-line">${escapeHtml(o.line)}</p><ul class="lens-focus label">${o.focus.map((f: string) => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div></article>`; };
+const folio = (o: any) => `<p class="folio label${o.sticky ? ' folio--sticky' : ''}${o.class ? ' ' + o.class : ''}"><span>${escapeHtml(o.code)}</span>${o.chapter ? `<span class="folio-sep" aria-hidden="true">·</span><span>CH. ${escapeHtml(o.chapter)}</span>` : ''}<span class="folio-sep" aria-hidden="true">·</span><span>${escapeHtml(o.title)}</span></p>`;
+const legend = (o: any) => { const gaps = [12,8,5.5,3.6,2.5]; return `<figure class="legend${o.class ? ' ' + o.class : ''}" style="--tilt:${tilt(o.seed ?? o.title, 0)}deg"><figcaption class="label legend-title">${escapeHtml(o.title)}</figcaption>${o.hachure ? `<div class="legend-hatch"><svg viewBox="0 0 150 22" width="150" height="22" aria-hidden="true">${gaps.map((g,i)=>`<svg x="${i*30}" y="0" width="28" height="22" viewBox="0 0 28 22">${Array.from({length:Math.ceil(50/g)+1},(_,k)=>`<line x1="${k*g-20}" y1="22" x2="${k*g}" y2="0" stroke="currentColor" stroke-width="0.7"/>`).join('')}<rect x="0.5" y="0.5" width="27" height="21" fill="none" stroke="currentColor" stroke-width="0.75"/></svg>`).join('')}</svg><p class="label"><span>SPARSE = FEW HOT DAYS</span><span>DENSE = MANY</span></p>${o.range ? `<p class="mono legend-range">${escapeHtml(o.range)}</p>` : ''}</div>` : `<ul class="legend-list">${(o.entries ?? []).map((e:any)=>`<li><span class="legend-swatch" style="background:${escapeHtml(e.color)}"></span><span class="mono">${escapeHtml(e.label)}</span></li>`).join('')}${o.nodata ? '<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">no data</span></li>' : ''}</ul>`}</figure>`; };
+const trendFigure = (o: any) => `<figure class="trendfig${o.class ? ' ' + o.class : ''}">${o.caption ? `<p class="label trendfig-cap">${escapeHtml(o.caption)}</p>` : ''}<div class="trendfig-plot">${renderTrend(o)}</div><figcaption class="source label">SOURCE: ${escapeHtml(o.source)}${o.href ? ` · <a href="${escapeHtml(o.href)}">OPEN IN ATLAS</a>` : ''}</figcaption></figure>`;
+const specimenTag = (o: any) => { const d=o.dataset, key=o.seed ?? d?.code ?? o.planned ?? 'tag'; const dg=tilt(key,1), drop=Math.round(rng(key+'drop')()*20), H=o.headingTag??'h3'; const basePath=d?u(`/data/${d.slug}/${d.folder}`):''; return `<article class="tag${d?'':' tag--planned'}${o.class?' '+o.class:''}" style="--tilt:${dg}deg; --drop:${drop}px"><span class="tag-string" aria-hidden="true"></span><span class="tag-hole" aria-hidden="true"></span>${d?`<p class="label tag-code">${escapeHtml(d.code)}</p><${H} class="display tag-title"><a href="${u(`/datasets/${d.slug}`)}">${escapeHtml(d.title)}</a></${H}><p class="label tag-cover">${escapeHtml(o.state??'Maharashtra').toUpperCase()} · ${d.districts} DISTRICTS · ${d.first_year}–${d.last_year}</p><dl class="tag-facts label"><div><dt>Columns</dt><dd class="num">${d.columns}</dd></div><div><dt>Rows</dt><dd class="num">${d.rows.toLocaleString('en-IN')}</dd></div><div><dt>Formats</dt><dd>CSV · JSON</dd></div><div><dt>Size</dt><dd class="num">${d.csv_kb} KB CSV</dd></div></dl><p class="tag-dl"><a href="${basePath}.csv" download>CSV</a><a href="${basePath}.json" download>JSON</a><a href="${u(`/datasets/${d.slug}`)}">Dataset page</a></p>`:`<p class="label tag-code">COMING</p><${H} class="display tag-title">${escapeHtml(o.planned)}</${H}>${o.note?`<p class="tag-note">${escapeHtml(o.note)}</p>`:''}`}</article>`; };
+const sketchMap = (o: any) => { const fc=districtsGeo(); const fitTo=o.extend?{type:'FeatureCollection',features:[...fc.features,{type:'Feature',properties:{},geometry:{type:'MultiPoint',coordinates:[[o.extend[0],o.extend[1]],[o.extend[2],o.extend[3]]]}}]}:stateGeo(); const frame=frameFor(fitTo,o.width??640,o.height??470,o.pad??14); const ds=sketchDistricts(fc,{frame,values:o.values,range:o.range,seedSalt:o.seedSalt??0}); const pts=(o.waypoints??[]).map((w:any,i:number)=>{let x:number,y:number;if(w.lgd){const d=ds.find((q:any)=>q.lgd===w.lgd)!;x=d.x;y=d.y;}else [x,y]=frame.project([w.lon,w.lat]);return {...w,x,y,n:String(i+1).padStart(2,'0'),ring:roughCircle(x,y,22,900+i)};}); const route=pts.length>1?'M'+pts.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L'):''; return `<svg class="sketch${o.colors?' sketch--color':''}${o.class?' '+o.class:''}" viewBox="0 0 ${o.width??640} ${o.height??470}" role="img" aria-label="${escapeHtml(o.title)}">${o.desc?`<desc>${escapeHtml(o.desc)}</desc>`:''}<g class="sketch-districts">${ds.map((d:any)=>`<g class="sk-d${d.lgd===o.selected?' is-selected':''}" data-lgd="${d.lgd}" data-name="${escapeHtml(d.name)}"><path class="sk-hit" d="${d.plain}"${o.colors?.[d.lgd]?` style="fill:${o.colors[d.lgd]}"`:''}/>${d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:''}<path class="sk-line" d="${d.outline.join(' ')}"/><title>${escapeHtml(d.name)}${o.values?`: ${o.values[d.lgd]==null?'no data':fmt(o.values[d.lgd],0)}${o.unit?' '+o.unit:''}`:''}</title></g>`).join('')}</g>${route?`<path class="wp-route" d="${route}"/>`:''}${pts.map(p=>`<g class="wp" transform-origin="${p.x} ${p.y}"><circle cx="${p.x}" cy="${p.y}" r="11" class="wp-fill"/><path d="${p.ring}" class="wp-ring"/><text x="${p.x}" y="${p.y+3.5}" text-anchor="middle" class="wp-n">${p.n}</text><text x="${p.x+16}" y="${p.y+4}" class="wp-label">${escapeHtml(p.label)}</text></g>`).join('')}</svg>`; };
+const indiaSketch = (o:any={}) => { const width=o.width??620,height=o.height??700,cls=o.class??'',thaneId=o.thaneId??'sk-thane',mhId=o.mhId??'sk-mh';const india=indiaGeo(),frame=frameFor(india,width,height,8),states=sketchOutlines(india,frame,{roughness:.55}),mh=districtsGeo(),uniform=Object.fromEntries(mh.features.map((f:any)=>[String(f.properties.lgd),1])),ds=sketchDistricts(mh,{frame,values:uniform,range:[0,1],gap:[4.2,4.2],roughness:.5,hatchWeight:.5}),thane=ds.find((d:any)=>d.name==='Thane'),mhState=states.find((s:any)=>s.props.mapped),cx=ds.reduce((a:number,d:any)=>a+d.x,0)/ds.length,cy=ds.reduce((a:number,d:any)=>a+d.y,0)/ds.length,ring=roughCircle(cx,cy,22,4242);return `<svg class="india ${cls}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Map of India by state. Maharashtra is inked in with its 35 districts; other states are outlines, not yet mapped."><g class="india-states">${states.filter((s:any)=>!s.props.mapped).map((s:any)=>`<path d="${s.d}"><title>${escapeHtml(s.props.name)}: not yet mapped</title></path>`).join('')}</g><g class="india-mh" id="${mhId}"><g class="india-mh-fill">${ds.map((d:any)=>`<path d="${d.plain}"/>`).join('')}</g><g class="india-mh-hatch">${ds.map((d:any)=>`<path d="${d.hatch.join(' ')}"/>`).join('')}</g><g class="india-mh-lines">${ds.map((d:any)=>`<path class="draw" pathLength="1" d="${d.outline.join(' ')}"${d.name==='Thane'?` id="${thaneId}"`:''}><title>${escapeHtml(d.name)}</title></path>`).join('')}</g>${mhState?`<path class="india-mh-edge" d="${mhState.d}"/>`:''}</g><g class="india-wp" id="sk-mh-pt"><circle cx="${cx}" cy="${cy}" r="11" class="wp-fill"/><path d="${ring}" class="wp-ring"/><text x="${cx}" y="${cy+3.5}" text-anchor="middle" class="wp-n">01</text></g>${thane?`<circle cx="${thane.x}" cy="${thane.y}" r="1" fill="none" id="${thaneId}-pt"/>`:''}</svg>`; };
+const census = (slotHtml: string, o:any={}) => {
+  const width=o.width??640,height=o.height??470,s=stats(),fc=districtsGeo(),frame=frameFor(stateGeo(),width,height,10),df=decadeFrames();
+  const idx=df.decades.map((d:any,i:number)=>({...d,i})).filter((d:any,k:number,all:any[])=>d.complete||k===all.length-1).filter((d:any)=>d.start>=1960);
+  const frames=idx.map((d:any)=>({label:d.complete?d.label:`${d.first}–${d.last} · PARTIAL`,first:d.first,last:d.last,i:d.i,values:Object.fromEntries(Object.entries(df.values).map(([k,v]:any)=>[k,v[d.i]]))}));
+  const all=frames.flatMap((f:any)=>Object.values(f.values) as number[]).filter((v:any)=>v!=null).sort((a:number,b:number)=>a-b),q=(p:number)=>all[Math.round((all.length-1)*p)],range:[number,number]=[q(.05),q(.95)];
+  const outline=sketchDistricts(fc,{frame,roughness:.7}),shaded=frames.map((f:any)=>sketchDistricts(fc,{frame,values:f.values,range,seedSalt:f.first,roughness:.7}));
+  const cls=classify({kind:'warm',breaks:'quantile',values:all,decimals:0,unit:'days'}),colors=Object.fromEntries(outline.map((d:any)=>[d.lgd,frames.map((f:any)=>cls.color(f.values[d.lgd])??'none')]));
+  const iFirst=frames.findIndex((f:any)=>f.label===s.decade_first),iLast=frames.findIndex((f:any)=>f.label===s.decade_last),m=metricFile('temperature','days_tmax_above_p90');
+  const SW=1200,SH=150,pad={l:44,r:16,t:18,b:26},x=scaleLinear().domain([m.years[0],m.years[m.years.length-1]]).range([pad.l,SW-pad.r]),ymax=Math.max(...(m.state_mean as number[])),y=scaleLinear().domain([0,ymax*1.08]).range([SH-pad.b,pad.t]).nice(3),pts=m.years.map((yr:number,i:number)=>[x(yr),y(m.state_mean![i] as number)] as [number,number]),pen=roughLine(pts,1951,.35),decadesTicks=m.years.filter((yr:number)=>yr%10===0),penData={years:m.years,mean:m.state_mean,x0:pad.l,x1:SW-pad.r,y0:y.domain()[0],y1:y.domain()[1],top:pad.t,bottom:SH-pad.b},frameMeta=frames.map((f:any)=>({label:f.label,first:f.first,last:f.last})),tally=Object.fromEntries(outline.map((d:any)=>[d.lgd,{name:d.name,a:frames[iFirst]?.values[d.lgd],b:frames[iLast]?.values[d.lgd]}]));
+  const legendHtml=legend({class:'census-legend',title:'Unusually hot days a year · decade average',entries:cls.legend,seed:'census'});
+  return `<div class="census" data-census data-colors='${JSON.stringify(colors)}' data-frames='${JSON.stringify(frameMeta)}' data-pen='${JSON.stringify(penData)}' data-tally='${JSON.stringify(tally)}' data-labels="${s.decade_first}|${s.decade_last}"><div class="census-map"><p class="census-decade display" aria-live="off" data-decade></p><svg class="sketch census-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Maharashtra's districts shaded by unusually hot days, decade by decade from ${frames[0].label} to ${frames[frames.length-1].label}. Darker colour and denser shading mean more hot days."><g class="census-fill">${outline.map((d:any)=>`<path data-lgd="${d.lgd}" d="${d.plain}"/>`).join('')}</g>${shaded.map((ds:any[],k:number)=>`<g class="census-frame" data-frame="${k}"><g id="cf-${k}">${ds.map((d:any)=>d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:'').join('')}</g></g>`).join('')}<g class="census-outline" id="census-outline">${outline.map((d:any)=>`<g class="sk-d" data-lgd="${d.lgd}"><path class="sk-hit" d="${d.plain}"/><path class="sk-line" d="${d.outline.join(' ')}"/></g>`).join('')}</g></svg><div class="census-tally label" data-tally-card hidden></div><div class="census-ruler"><label class="label" for="census-slider">Decade</label><input id="census-slider" type="range" min="0" max="${frames.length-1}" step="1" value="0" data-slider aria-valuetext="${escapeHtml(frames[0].label)}"/><ol class="census-ticks label" aria-hidden="true">${frames.map((f:any)=>`<li>${escapeHtml(f.label.replace(' · PARTIAL',''))}</li>`).join('')}</ol></div>${legendHtml}</div><div class="census-lines">${slotHtml}</div><figure class="census-strip"><svg viewBox="0 0 ${SW} ${SH}" preserveAspectRatio="none" role="img" aria-label="Unusually hot days, 35-district average, ${m.years[0]} to ${m.years[m.years.length-1]}."><defs><clipPath id="pen-clip"><rect x="0" y="0" width="${SW}" height="${SH}" data-pen-clip/></clipPath></defs><rect class="strip-band" x="${x(1991)}" y="${pad.t}" width="${x(2020)-x(1991)}" height="${SH-pad.t-pad.b}"/>${y.ticks(3).map((t:number)=>`<g><line class="trend-grid" x1="${pad.l}" x2="${SW-pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="trend-tick" x="${pad.l-8}" y="${y(t)+3}" text-anchor="end">${t}</text></g>`).join('')}<line class="trend-axis" x1="${pad.l}" x2="${SW-pad.r}" y1="${SH-pad.b}" y2="${SH-pad.b}"/>${decadesTicks.map((t:number)=>`<g><line class="trend-axis" x1="${x(t)}" x2="${x(t)}" y1="${SH-pad.b}" y2="${SH-pad.b+5}"/><text class="trend-tick" x="${x(t)}" y="${SH-6}" text-anchor="middle">${t}</text></g>`).join('')}<path class="strip-pen" d="${pen}" clip-path="url(#pen-clip)"/><g class="strip-nib" data-pen-nib><circle r="4"/><line x1="0" y1="-5" x2="7" y2="-16"/></g></svg><figcaption class="label soft">Days a year above the 1991–2020 90th percentile · 35-district average · shaded band = 1991–2020 normal</figcaption></figure></div>`;
+};
+const pageStats = stats();
+// BN-DASH: the Atlas (MAP.md). Controls on the left page, the map in the
+// middle, the district panel in the right margin, the year ruler below.
+// Atlas interactions and URL state are implemented in this page.
+
+const s = stats();
+const ds = districts();
+const pageTitle = "Atlas";
+const pageDescription = "District-level climate records for Maharashtra: pick a measure, move through the years, open any district.";
+
+---
+<!doctype html>
+<html lang="en" data-base={BASE}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle === 'Bharatnomy' ? pageTitle : `${pageTitle} · Bharatnomy`}</title>
+    <meta name="description" content={pageDescription} />
+    
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <link rel="icon" href={u("/favicon.svg")} type="image/svg+xml" />
+    <meta name="theme-color" content="#F2F3EF" />
+    <script is:inline>document.documentElement.classList.add('js');</script>
+  </head>
+  <body class="atlas-page" data-base={BASE}>
+    <a class="skip" href="#main">Skip to content</a>
+    <Navbar code="BN-ATLAS" coordsText={coords(s.state_centroid[0], s.state_centroid[1])} coordsLabel="STATE 01 · MAHARASHTRA" />
+    <main id="main">
+
+  <div class="atlas" data-atlas data-tab="measure" data-metrics={JSON.stringify(METRICS)} data-datasets={JSON.stringify(DATASETS)}>
+    <header class="atlas-head bleed bleed-clm">
+      <h1 class="display t-mega atlas-title">ATLAS</h1>
+      <div class="atlas-intro">
+        <Fragment set:html={sticker("BN-DASH · MAHARASHTRA · DISTRICTS", {tone:"ink", seed:"atlas"})} />
+        <p class="t-lead">District-level climate records for Maharashtra. Pick a measure, move through the years, open any district.</p>
+        <p class="soft atlas-india">India, state by state: Maharashtra is the first state in the Atlas. More states join as their data clears our verification standard.</p>
+      </div>
+    </header>
+
+    <p class="atlas-error" data-atlas-error hidden><a class="btn" href={u("/datasets")}><span>The map could not load. The data is still available on the datasets page.</span><span class="btn-arrow" aria-hidden="true">→</span></a></p>
+
+    <div class="atlas-body">
+      <!-- ============================================== controls (left page) -->
+      <aside class="atlas-controls atlas-pane" data-pane="measure" aria-label="Map controls">
+        <div class="ctl">
+          <label class="label" for="atlas-state">State</label>
+          <select id="atlas-state" disabled><option>Maharashtra</option></select>
+        </div>
+
+        <div class="ctl">
+          <p class="label" id="ds-label">Dataset</p>
+          <div class="ds-tabs" role="tablist" aria-labelledby="ds-label">
+            {DATASETS.map((d) => <button type="button" role="tab" class="ds-tab" data-ds={d.slug} aria-selected="false">{d.slug === 'temperature' ? 'Temperature' : 'Rainfall'}</button>)}
+          </div>
+        </div>
+
+        <fieldset class="ctl">
+          <legend class="label">Measure</legend>
+          <ul class="metric-list">
+            {METRICS.map((m) => (
+              <li data-metric-item data-dataset={m.dataset} hidden={m.dataset !== 'temperature'}>
+                <label class="metric">
+                  <input type="radio" name="metric" value={m.id} />
+                  <span class="metric-name">{m.label}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
+        <aside class="mnote ctl-help" data-help aria-live="polite"></aside>
+
+        <fieldset class="ctl">
+          <legend class="label">View</legend>
+          <div class="seg">
+            <label><input type="radio" name="view" value="year" /> <span>Single year</span></label>
+            <label><input type="radio" name="view" value="decade" /> <span>Decade average</span></label>
+            <label><input type="radio" name="view" value="change" /> <span>Change</span></label>
+          </div>
+          <div class="periods" data-change-periods hidden>
+            <p class="soft">Later period minus earlier period.</p>
+            <div class="period"><span class="label">Earlier</span><input type="number" data-period="a.0" aria-label="Earlier period, first year" /><span aria-hidden="true">to</span><input type="number" data-period="a.1" aria-label="Earlier period, last year" /></div>
+            <div class="period"><span class="label">Later</span><input type="number" data-period="b.0" aria-label="Later period, first year" /><span aria-hidden="true">to</span><input type="number" data-period="b.1" aria-label="Later period, last year" /></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="ctl">
+          <legend class="label">Classes</legend>
+          <div class="seg">
+            <label><input type="radio" name="classes" value="quantile" /> <span>Quantile (5)</span></label>
+            <label><input type="radio" name="classes" value="equal" /> <span>Equal interval (5)</span></label>
+          </div>
+          <p class="soft small" data-classes-note hidden>Diverging measures are always symmetric around zero.</p>
+        </fieldset>
+
+        <div class="ctl ctl-toggles">
+          <button type="button" class="btn" data-toggle="sketch" aria-pressed="false"><span>Sketch view</span></button>
+          <button type="button" class="btn" data-toggle="table" aria-pressed="false"><span>Show as table</span></button>
+          <button type="button" class="btn" data-png><span>Save map as PNG</span><span class="btn-arrow" aria-hidden="true">↓</span></button>
+        </div>
+      </aside>
+
+      <!-- ===================================================== the map -->
+      <section class="atlas-stage" aria-label="Map">
+        <p class="atlas-maptitle"><span class="display" data-map-title></span> <span class="label atlas-period" data-map-period></span></p>
+        <div class="atlas-mapwrap">
+          <div class="atlas-map" data-map tabindex="-1"></div>
+          <div class="atlas-sketch" data-sketch hidden></div>
+          <div class="atlas-tablewrap table-wrap" data-table hidden></div>
+          <div class="atlas-tip label" data-tip hidden></div>
+          <figure class="legend atlas-legend" data-legend></figure>
+        </div>
+        <aside class="mnote atlas-caveat"><span class="label mnote-label">Read with care</span>Figures are district averages of IMD's gridded data on 2011 boundaries. They are best compared across years and districts, not with a single weather station. Thane includes today's Palghar.</aside>
+        <p class="source label" data-source></p>
+        <p class="visually-hidden" aria-live="polite" data-sr></p>
+      </section>
+
+      <!-- ======================================= district panel (margin) -->
+      <aside class="atlas-panel atlas-pane" data-pane="district" aria-label="District">
+        <div class="atlas-search">
+          <label class="label" for="district-search">Find a district</label>
+          <input id="district-search" type="search" list="district-list" autocomplete="off" placeholder="Type a name, then Enter" />
+          <datalist id="district-list">{ds.map((d) => <option value={d.name} />)}</datalist>
+        </div>
+        <div class="dp card-flat" data-panel>
+          <div class="panel-empty"><p class="t-lead">Select a district on the map, or search for one.</p></div>
+        </div>
+      </aside>
+
+      <div class="atlas-pane atlas-pane-table" data-pane="table"><div class="table-wrap" data-table-m></div></div>
+    </div>
+
+    <!-- ======================================================= year ruler -->
+    <div class="atlas-rulerbar">
+      <button type="button" class="btn atlas-play" data-play aria-pressed="false"><span>Play</span></button>
+      <div class="ruler" data-ruler>
+        <svg viewBox="0 0 1000 64" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <div class="ruler-thumb" role="slider" tabindex="0" aria-label="Year" aria-valuemin="1951" aria-valuemax="2024" aria-valuenow="2024"><span>2024</span></div>
+      </div>
+    </div>
+
+    <nav class="atlas-tabs" aria-label="Atlas sections" role="tablist">
+      <button type="button" role="tab" data-tab-btn="measure" aria-selected="true">Measure</button>
+      <button type="button" role="tab" data-tab-btn="district" aria-selected="false">District</button>
+      <button type="button" role="tab" data-tab-btn="table" aria-selected="false">Table</button>
+    </nav>
+  </div>
+
+    </main>
+    <Footer stats={pageStats} />
+    <script>
+import * as maplibregl from 'maplibre-gl';
+const atlasEl = document.querySelector('[data-atlas]');
+const METRICS = JSON.parse(atlasEl.dataset.metrics || '[]');
+const DATASETS = JSON.parse(atlasEl.dataset.datasets || '[]');
+const BASE = document.documentElement.dataset.base || '/';
+const u = (p) => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE.replace(/\/$/, '') + (p.startsWith('/') ? p : '/' + p));
+const metrics = METRICS;
+const datasets = DATASETS;
+const metricById = (id) => metrics.find((m) => m.id === id);
+const metricsOf = (ds) => metrics.filter((m) => m.dataset === ds);
+const baselineOf = (ds) => (ds === 'temperature' ? [1991, 2020] : [1971, 2020]);
+function defaults(ds = 'temperature', lastYear = 2024) {
+    const d = datasets.find((x) => x.slug === ds);
+    return {
+        dataset: ds, metric: d.defaultMetric, view: 'year', year: lastYear,
+        a: [1961, 1990], b: [lastYear - 29, lastYear],
+        district: null, compare: [], classes: 'quantile', sketch: false, table: false,
+    };
+}
+const period = (s) => {
+    const m = s?.match(/^(\d{4})-(\d{4})$/);
+    return m && +m[1] <= +m[2] ? [+m[1], +m[2]] : null;
+};
+/** Parse the URL; anything invalid silently falls back to defaults. */
+function fromURL(lastYearOf, districts) {
+    const q = new URLSearchParams(location.search);
+    const ds = datasets.some((d) => d.slug === q.get('dataset')) ? q.get('dataset') : 'temperature';
+    const s = defaults(ds, lastYearOf(ds));
+    const m = q.get('metric');
+    if (m && metricsOf(ds).some((x) => x.id === m))
+        s.metric = m;
+    const v = q.get('view');
+    if (v === 'year' || v === 'decade' || v === 'change')
+        s.view = v;
+    if (metricById(s.metric).breaks === 'categorical')
+        s.view = 'year';
+    const y = Number(q.get('year'));
+    if (y >= 1951 && y <= lastYearOf(ds))
+        s.year = y;
+    s.a = period(q.get('a')) ?? s.a;
+    s.b = period(q.get('b')) ?? s.b;
+    const d = q.get('district');
+    if (d && districts.has(d))
+        s.district = d;
+    s.compare = (q.get('compare') ?? '').split(',').filter((c) => districts.has(c) && c !== s.district).slice(0, 3);
+    if (q.get('classes') === 'equal')
+        s.classes = 'equal';
+    s.sketch = q.get('sketch') === '1';
+    s.table = q.get('table') === '1';
+    return s;
+}
+function toURL(s) {
+    const q = new URLSearchParams();
+    q.set('dataset', s.dataset);
+    q.set('metric', s.metric);
+    q.set('view', s.view);
+    if (s.view === 'change') {
+        q.set('a', s.a.join('-'));
+        q.set('b', s.b.join('-'));
+    }
+    else
+        q.set('year', String(s.year));
+    if (s.district)
+        q.set('district', s.district);
+    if (s.compare.length)
+        q.set('compare', s.compare.join(','));
+    if (s.classes !== 'quantile')
+        q.set('classes', s.classes);
+    if (s.sketch)
+        q.set('sketch', '1');
+    if (s.table)
+        q.set('table', '1');
+    history.replaceState(null, '', `${location.pathname}?${q}`);
+}
+
+
+const cache = new Map();
+function loadMetric(ds, id) {
+    const k = `${ds}/${id}`;
+    if (!cache.has(k))
+        cache.set(k, fetch(u(`/data/${k}.json`)).then((r) => {
+            if (!r.ok)
+                throw new Error(k);
+            return r.json();
+        }));
+    return cache.get(k);
+}
+const mean = (xs) => { const v = xs.filter((x) => typeof x === 'number'); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+const between = (f, lgd, a, b) => mean(f.years.map((y, i) => (y >= a && y <= b ? f.values[lgd][i] : null)));
+function decadeOf(year, f) {
+    const s = Math.floor(year / 10) * 10;
+    return [Math.max(s, f.years[0]), Math.min(s + 9, f.years[f.years.length - 1])];
+}
+function decadeLabel(year, f) {
+    const [a, b] = decadeOf(year, f);
+    return b - a === 9 ? `${a}s` : `${a}–${b} · partial`;
+}
+/** Values currently on the map, keyed by LGD code. */
+function viewValues(f, s) {
+    const out = {};
+    const yi = f.years.indexOf(s.year);
+    for (const lgd of Object.keys(f.values)) {
+        if (s.view === 'year')
+            out[lgd] = yi < 0 ? null : f.values[lgd][yi];
+        else if (s.view === 'decade') {
+            const [a, b] = decadeOf(s.year, f);
+            out[lgd] = between(f, lgd, a, b);
+        }
+        else {
+            const A = between(f, lgd, s.a[0], s.a[1]), B = between(f, lgd, s.b[0], s.b[1]);
+            out[lgd] = A == null || B == null ? null : B - A;
+        }
+    }
+    return out;
+}
+function baselineMean(f, lgd, ds) {
+    const [a, b] = baselineOf(ds);
+    return between(f, lgd, a, b);
+}
+/** Colour classes. Year/decade use every value in the record, so colours mean
+ *  the same thing in every year; change is symmetric around zero. */
+function scaleFor(f, m, s, shown) {
+    if (s.view === 'change') {
+        const kind = m.dataset === 'temperature' ? 'anomaly' : m.id === 'monsoon_longest_dry_spell_days' ? 'wetdry_rev' : 'wetdry';
+        const unit = m.unit === '%' ? 'pts' : m.unit;
+        return { ...classify({ kind: kind, breaks: 'diverging-symmetric', values: Object.values(shown), decimals: m.decimals, unit }), unit };
+    }
+    const all = m.breaks === 'categorical' ? [] : Object.values(f.values).flat().filter((v) => typeof v === 'number');
+    return { ...classify({ kind: m.scale, breaks: m.breaks, values: all, method: s.classes, decimals: m.decimals, unit: m.unit, fixed: m.fixed, categories: m.categories }), unit: m.unit };
+}
+
+
+maplibregl.setWorkerUrl(u('/maplibre/maplibre-gl-worker.mjs'));
+const INK = '#16181C', ACCENT = '#2346C7';
+function bbox(fc) {
+    let w = 180, s = 90, e = -180, n = -90;
+    const walk = (c) => {
+        if (typeof c[0] === 'number') {
+            w = Math.min(w, c[0]);
+            e = Math.max(e, c[0]);
+            s = Math.min(s, c[1]);
+            n = Math.max(n, c[1]);
+        }
+        else
+            c.forEach(walk);
+    };
+    fc.features.forEach((f) => walk(f.geometry.coordinates));
+    return [w, s, e, n];
+}
+/** A diagonal-hatch image for "no data" districts. */
+function hatchImage() {
+    const N = 8, data = new Uint8Array(N * N * 4);
+    for (let y = 0; y < N; y++)
+        for (let x = 0; x < N; x++) {
+            const on = (x + y) % N === 0;
+            const i = (y * N + x) * 4;
+            data[i] = 76;
+            data[i + 1] = 83;
+            data[i + 2] = 92;
+            data[i + 3] = on ? 255 : 0;
+        }
+    return { width: N, height: N, data };
+}
+function createMap(el, districts, state, opts) {
+    const [w, s, e, n] = bbox(districts);
+    const padX = (e - w) * 0.25, padY = (n - s) * 0.25;
+    const map = new maplibregl.Map({
+        container: el,
+        style: {
+            version: 8,
+            sources: {
+                districts: { type: 'geojson', data: districts, promoteId: 'lgd' },
+                state: { type: 'geojson', data: state },
+            },
+            layers: [
+                { id: 'fill', type: 'fill', source: 'districts', paint: { 'fill-color': ['coalesce', ['feature-state', 'color'], 'rgba(0,0,0,0)'], 'fill-color-transition': { duration: 250 } } },
+                { id: 'line', type: 'line', source: 'districts', paint: { 'line-color': INK, 'line-width': 0.75 } },
+                { id: 'compare', type: 'line', source: 'districts', paint: { 'line-color': INK, 'line-width': 1.75, 'line-dasharray': [2, 1.5], 'line-opacity': ['case', ['boolean', ['feature-state', 'compare'], false], 1, 0] } },
+                { id: 'hover', type: 'line', source: 'districts', paint: { 'line-color': INK, 'line-width': 1.75, 'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 1, 0] } },
+                { id: 'state', type: 'line', source: 'state', paint: { 'line-color': INK, 'line-width': 1.5 } },
+                { id: 'selected', type: 'line', source: 'districts', paint: { 'line-color': ACCENT, 'line-width': 2.5, 'line-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0] } },
+            ],
+        },
+        bounds: [w, s, e, n],
+        fitBoundsOptions: { padding: 24 },
+        maxBounds: [w - padX, s - padY, e + padX, n + padY],
+        maxZoom: 9,
+        dragRotate: false,
+        pitchWithRotate: false,
+        touchPitch: false,
+        attributionControl: false,
+        canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
+        cooperativeGestures: false,
+    });
+    map.touchZoomRotate.disableRotation();
+    map.keyboard.disableRotation();
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    return new Promise((resolve) => {
+        map.on('load', () => {
+            map.addImage('nodata', hatchImage());
+            map.addLayer({ id: 'nodata', type: 'fill', source: 'districts', paint: { 'fill-pattern': 'nodata', 'fill-opacity': ['case', ['boolean', ['feature-state', 'nodata'], false], 1, 0] } }, 'line');
+            map.setMinZoom(Math.max(0, map.getZoom() - 1));
+            // keep the whole state in view when the box changes size, until the reader moves the map
+            let touched = false;
+            map.on('dragstart', () => { touched = true; });
+            map.on('zoomstart', (e) => {
+                if (e.originalEvent)
+                    touched = true;
+            });
+            const refit = () => {
+                map.resize();
+                if (!touched)
+                    map.fitBounds([w, s, e, n], { padding: 24, animate: false });
+            };
+            if ('ResizeObserver' in window)
+                new ResizeObserver(() => requestAnimationFrame(refit)).observe(el);
+            let hovered = null;
+            map.on('mousemove', 'fill', (ev) => {
+                const id = ev.features?.[0]?.id;
+                if (id == null)
+                    return;
+                if (hovered !== id) {
+                    if (hovered)
+                        map.setFeatureState({ source: 'districts', id: hovered }, { hover: false });
+                    hovered = String(id);
+                    map.setFeatureState({ source: 'districts', id: hovered }, { hover: true });
+                }
+                map.getCanvas().style.cursor = 'pointer';
+                opts.onHover(hovered, ev.point.x, ev.point.y);
+            });
+            map.on('mouseleave', 'fill', () => {
+                if (hovered)
+                    map.setFeatureState({ source: 'districts', id: hovered }, { hover: false });
+                hovered = null;
+                map.getCanvas().style.cursor = '';
+                opts.onHover(null, 0, 0);
+            });
+            map.on('click', (ev) => {
+                const f = map.queryRenderedFeatures(ev.point, { layers: ['fill'] })[0];
+                opts.onClick(f ? String(f.id) : null);
+            });
+            let markers = [];
+            let lastSel = null, lastCmp = [];
+            const api = {
+                map,
+                setColors(colors, fadeMs) {
+                    map.setPaintProperty('fill', 'fill-color-transition', { duration: fadeMs, delay: 0 });
+                    for (const [id, c] of Object.entries(colors))
+                        map.setFeatureState({ source: 'districts', id }, { color: c ?? 'rgba(0,0,0,0)', nodata: c == null });
+                },
+                setSelection(selected, compare, names, centroids) {
+                    if (lastSel)
+                        map.setFeatureState({ source: 'districts', id: lastSel }, { selected: false });
+                    lastCmp.forEach((id) => map.setFeatureState({ source: 'districts', id }, { compare: false }));
+                    if (selected)
+                        map.setFeatureState({ source: 'districts', id: selected }, { selected: true });
+                    compare.forEach((id) => map.setFeatureState({ source: 'districts', id }, { compare: true }));
+                    lastSel = selected;
+                    lastCmp = [...compare];
+                    markers.forEach((m) => m.remove());
+                    markers = [selected, ...compare].filter(Boolean).map((id, i) => {
+                        const d = document.createElement('span');
+                        d.className = `atlas-maplabel${i === 0 && selected ? ' is-sel' : ''}`;
+                        d.textContent = names[id];
+                        return new maplibregl.Marker({ element: d, anchor: 'bottom', offset: [0, -6] }).setLngLat(centroids[id]).addTo(map);
+                    });
+                },
+                resize() { map.resize(); },
+            };
+            resolve(api);
+        });
+    });
+}
+
+
+function createRuler(root, onChange) {
+    const svg = root.querySelector('svg');
+    const thumb = root.querySelector('[role="slider"]');
+    let years = [1951, 2024], year = 2024, disabled = false;
+    const W = 1000, H = 64, L = 8, R = 8;
+    const x = (y) => L + ((y - years[0]) / (years[years.length - 1] - years[0] || 1)) * (W - L - R);
+    const draw = (series) => {
+        const parts = [`<line x1="${L}" x2="${W - R}" y1="${H - 18}" y2="${H - 18}" class="rl-base"/>`];
+        for (const y of years) {
+            const big = y % 10 === 0, mid = y % 5 === 0;
+            parts.push(`<line x1="${x(y)}" x2="${x(y)}" y1="${H - 18}" y2="${H - 18 - (big ? 12 : mid ? 8 : 4)}" class="rl-tick"/>`);
+            if (big)
+                parts.push(`<text x="${x(y)}" y="${H - 4}" text-anchor="middle" class="rl-label">${y}</text>`);
+        }
+        if (series) {
+            const v = series.filter((s) => s != null);
+            const lo = Math.min(...v), hi = Math.max(...v);
+            const yy = (s) => 4 + (1 - (s - lo) / (hi - lo || 1)) * 22;
+            const d = series.map((s, i) => (s == null ? '' : `${i && series[i - 1] != null ? 'L' : 'M'}${x(years[i]).toFixed(1)},${yy(s).toFixed(1)}`)).join('');
+            parts.push(`<path d="${d}" class="rl-spark"/>`);
+        }
+        svg.innerHTML = parts.join('');
+    };
+    const place = () => {
+        thumb.style.left = `${(x(year) / W) * 100}%`;
+        thumb.classList.toggle('is-end', x(year) / W > 0.93);
+        thumb.setAttribute('aria-valuenow', String(year));
+        thumb.setAttribute('aria-valuetext', String(year));
+        thumb.querySelector('span').textContent = String(year);
+        root.classList.toggle('is-disabled', disabled);
+        thumb.setAttribute('aria-disabled', String(disabled));
+    };
+    const fromX = (clientX) => {
+        const r = svg.getBoundingClientRect();
+        const t = ((clientX - r.left) / r.width) * W;
+        const f = (t - L) / (W - L - R);
+        return Math.round(years[0] + Math.max(0, Math.min(1, f)) * (years[years.length - 1] - years[0]));
+    };
+    const commit = (y, scrubbing) => {
+        y = Math.max(years[0], Math.min(years[years.length - 1], y));
+        if (y === year && scrubbing)
+            return;
+        year = y;
+        place();
+        onChange(y, scrubbing);
+    };
+    let dragging = false;
+    root.addEventListener('pointerdown', (e) => {
+        if (disabled)
+            return;
+        dragging = true;
+        root.setPointerCapture(e.pointerId);
+        thumb.focus({ preventScroll: true });
+        commit(fromX(e.clientX), true);
+    });
+    root.addEventListener('pointermove', (e) => {
+        if (dragging)
+            commit(fromX(e.clientX), true);
+    });
+    const end = () => {
+        if (dragging) {
+            dragging = false;
+            onChange(year, false);
+        }
+    };
+    root.addEventListener('pointerup', end);
+    root.addEventListener('pointercancel', end);
+    thumb.addEventListener('keydown', (e) => {
+        if (disabled)
+            return;
+        const step = e.shiftKey ? 10 : 1;
+        const map = { ArrowLeft: year - step, ArrowDown: year - step, ArrowRight: year + step, ArrowUp: year + step, Home: years[0], End: years[years.length - 1], PageDown: year - 10, PageUp: year + 10 };
+        if (e.key in map) {
+            e.preventDefault();
+            commit(map[e.key], false);
+        }
+    });
+    return {
+        set(y, series, ys, dis = false) {
+            const changed = ys[0] !== years[0] || ys[ys.length - 1] !== years[years.length - 1];
+            years = ys;
+            year = y;
+            disabled = dis;
+            thumb.setAttribute('aria-valuemin', String(ys[0]));
+            thumb.setAttribute('aria-valuemax', String(ys[ys.length - 1]));
+            draw(series);
+            if (changed) { /* redrawn above */ }
+            place();
+        },
+    };
+}
+
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function fmtVal(v, m, s, unit) {
+    if (v == null)
+        return 'no data';
+    if (typeof v === 'string')
+        return v;
+    if (s.view === 'change')
+        return `${signed(v, m.decimals)}${unit === '%' || unit === 'pts' ? ' pts' : unit && unit !== 'SPI' ? ' ' + unit : ''}`;
+    const dec = s.view === 'decade' ? Math.max(1, m.decimals) : m.decimals;
+    if (m.breaks === 'diverging-symmetric' || m.breaks === 'fixed')
+        return `${signed(v, dec)}${unit === '%' ? '%' : unit && unit !== 'SPI' ? ' ' + unit : ''}`;
+    return withUnit(v, unit, dec);
+}
+/* ------------------------------------------------------------ legend ---- */
+function renderLegend(el, title, c, hasNoData) {
+    el.innerHTML = `<p class="label legend-title">${esc(title)}</p><ul class="legend-list">${c.legend
+        .map((e) => `<li><span class="legend-swatch" style="background:${e.color}"></span><span class="mono">${esc(e.label)}</span></li>`).join('')}${hasNoData ? '<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">no data</span></li>' : ''}</ul>`;
+}
+/* ------------------------------------------------------- sketch view ---- */
+let sketchCache = null;
+function renderSketch(el, fc, state, shown, colors, selected, compare, onPick) {
+    const W = 760, H = 560;
+    if (!sketchCache || sketchCache.fc !== fc)
+        sketchCache = { fc, frame: frameFor(state, W, H, 16) };
+    const nums = Object.values(shown).filter((v) => typeof v === 'number').sort((a, b) => a - b);
+    const range = nums.length ? [nums[0], nums[nums.length - 1]] : undefined;
+    const vals = Object.fromEntries(Object.entries(shown).map(([k, v]) => [k, typeof v === 'number' ? (range && range[0] < 0 ? Math.abs(v) : v) : v == null ? null : 0.5]));
+    const absRange = range ? (range[0] < 0 ? [0, Math.max(Math.abs(range[0]), Math.abs(range[1]))] : range) : undefined;
+    const ds = sketchDistricts(fc, { frame: sketchCache.frame, values: vals, range: absRange ?? [0, 1], roughness: 0.7 });
+    el.innerHTML = `<svg class="sketch sketch--color atlas-sketch-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Sketch view of the current map. Hachure density and colour encode the values.">${ds.map((d) => `<g class="sk-d${d.lgd === selected ? ' is-selected' : ''}${compare.includes(d.lgd) ? ' is-compare' : ''}" data-lgd="${d.lgd}" tabindex="-1"><path class="sk-hit" d="${d.plain}" style="fill:${colors[d.lgd] ?? 'url(#sk-nodata)'}"/>${d.hatch.length ? `<path class="sk-hatch" d="${d.hatch.join(' ')}"/>` : ''}<path class="sk-line" d="${d.outline.join(' ')}"/><title>${esc(d.name)}</title></g>`).join('')}<defs><pattern id="sk-nodata" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#4C535C" stroke-width="1"/></pattern></defs></svg>`;
+    el.querySelectorAll('.sk-d').forEach((g) => g.addEventListener('click', () => onPick(g.dataset.lgd)));
+}
+/* -------------------------------------------------------- table view ---- */
+let sortKey = 'rank', sortAsc = true;
+function renderTable(el, rows, m, s, unit, colors, baselineLabel, onPick) {
+    const num = rows.filter((r) => typeof r.value === 'number');
+    const maxAbs = Math.max(1e-9, ...num.map((r) => Math.abs(r.value)));
+    const ranked = [...rows].sort((a, b) => (typeof b.value === 'number' ? b.value : -Infinity) - (typeof a.value === 'number' ? a.value : -Infinity));
+    const rank = new Map(ranked.map((r, i) => [r.lgd, typeof r.value === 'number' ? i + 1 : null]));
+    const key = (r) => sortKey === 'name' ? r.name : sortKey === 'value' ? (typeof r.value === 'number' ? r.value : String(r.value)) : sortKey === 'change' ? (r.change ?? -Infinity) : (rank.get(r.lgd) ?? 999);
+    const sorted = [...rows].sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * (sortAsc ? 1 : -1); });
+    const th = (k, label, cls = '') => `<th scope="col" class="${cls}" ${sortKey === k ? `aria-sort="${sortAsc ? 'ascending' : 'descending'}"` : ''}><button type="button" data-k="${k}">${label}</button></th>`;
+    const showChange = s.view !== 'change' && m.breaks !== 'categorical';
+    el.innerHTML = `<table class="dense atlas-table"><caption class="visually-hidden">${esc(m.label)}, all districts</caption><thead><tr>${th('rank', 'Rank', 'r')}${th('name', 'District')}${th('value', s.view === 'change' ? 'Change' : 'Value', 'r')}${showChange ? th('change', `vs ${baselineLabel}`, 'r') : ''}<th scope="col">Bar</th></tr></thead><tbody>${sorted.map((r) => {
+        const v = r.value;
+        const w = typeof v === 'number' ? Math.round((Math.abs(v) / maxAbs) * 100) : 0;
+        return `<tr${r.lgd === s.district ? ' class="is-sel"' : ''}><td class="num r">${rank.get(r.lgd) ?? '–'}</td><td><button type="button" class="linkish" data-pick="${r.lgd}">${esc(r.name)}</button></td><td class="num r">${esc(fmtVal(v, m, s, unit))}</td>${showChange ? `<td class="num r">${r.change == null ? '–' : esc(signed(r.change, m.decimals))}</td>` : ''}<td class="bar-cell"><span class="bar${typeof v === 'number' && v < 0 ? ' neg' : ''}" style="width:${w}%;background:${colors[r.lgd] ?? 'transparent'}"></span></td></tr>`;
+    }).join('')}</tbody></table>`;
+    el.querySelectorAll('th button').forEach((b) => b.addEventListener('click', () => {
+        const k = b.dataset.k;
+        sortAsc = sortKey === k ? !sortAsc : k === 'name' || k === 'rank';
+        sortKey = k;
+        renderTable(el, rows, m, s, unit, colors, baselineLabel, onPick);
+    }));
+    el.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => onPick(b.dataset.pick)));
+}
+/* -------------------------------------------------------- PNG export ---- */
+async function savePNG(canvas, sketchSvg, title, subtitle, legend, legendTitle, source) {
+    const W = 1600, H = 1100, out = document.createElement('canvas');
+    out.width = W;
+    out.height = H;
+    const g = out.getContext('2d');
+    g.fillStyle = '#F2F3EF';
+    g.fillRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(22,24,28,0.05)';
+    g.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) {
+        g.beginPath();
+        g.moveTo(x + 0.5, 0);
+        g.lineTo(x + 0.5, H);
+        g.stroke();
+    }
+    for (let y = 0; y < H; y += 40) {
+        g.beginPath();
+        g.moveTo(0, y + 0.5);
+        g.lineTo(W, y + 0.5);
+        g.stroke();
+    }
+    let img = canvas;
+    if (sketchSvg) {
+        const xml = new XMLSerializer().serializeToString(sketchSvg).replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')
+            .replace(/class="sk-line"/g, 'fill="none" stroke="#16181C" stroke-width="0.9"').replace(/class="sk-hatch"/g, 'fill="none" stroke="#16181C" stroke-width="0.55" opacity="0.4"');
+        const im = new Image();
+        im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+        await im.decode();
+        img = im;
+    }
+    if (img) {
+        const iw = img.width, ih = img.height;
+        const box = { x: 60, y: 170, w: 1100, h: 780 };
+        const k = Math.min(box.w / iw, box.h / ih);
+        g.drawImage(img, box.x + (box.w - iw * k) / 2, box.y + (box.h - ih * k) / 2, iw * k, ih * k);
+    }
+    g.fillStyle = '#16181C';
+    g.font = '800 64px "Big Shoulders Display", Archivo, sans-serif';
+    g.fillText(title, 60, 100);
+    g.font = '500 20px "Geist Mono", monospace';
+    g.fillStyle = '#4C535C';
+    g.fillText(subtitle.toUpperCase(), 60, 140);
+    // legend
+    let y = 220;
+    g.fillStyle = '#16181C';
+    g.font = '500 16px "Geist Mono", monospace';
+    g.fillText(legendTitle.toUpperCase(), 1200, y);
+    y += 20;
+    for (const e of legend.legend) {
+        g.fillStyle = e.color;
+        g.fillRect(1200, y, 36, 20);
+        g.strokeStyle = '#16181C';
+        g.strokeRect(1200.5, y + 0.5, 36, 20);
+        g.fillStyle = '#16181C';
+        g.font = '400 16px "Geist Mono", monospace';
+        g.fillText(e.label, 1250, y + 15);
+        y += 30;
+    }
+    g.fillStyle = '#4C535C';
+    g.font = '400 14px "Geist Mono", monospace';
+    const words = source.toUpperCase().split(' ');
+    let line = '', ly = 1010;
+    for (const w of words) {
+        if (g.measureText(line + w).width > 1480) {
+            g.fillText(line, 60, ly);
+            ly += 22;
+            line = '';
+        }
+        line += w + ' ';
+    }
+    g.fillText(line, 60, ly);
+    g.fillStyle = '#16181C';
+    g.font = '800 22px "Big Shoulders Display", sans-serif';
+    g.fillText('BHARATNOMY', W - 190, H - 30);
+    const blob = await new Promise((r) => out.toBlob((b) => r(b), 'image/png'));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `bharatnomy-atlas-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+
+const RELATED = {
+    temperature: ['tmax_highest_c', 'days_tmax_40c_or_more', 'tmax_mean_anomaly_c'],
+    rainfall: ['rainfall_jun_sep_mm', 'rainfall_jun_sep_departure_pct', 'rx1day_mm'],
+};
+const DASHES = ['', '6 3', '2 3', '9 3 2 3'];
+function periodLabel(f, s) {
+    return s.view === 'year' ? String(s.year) : s.view === 'decade' ? decadeLabel(s.year, f) : `${s.b[0]}–${s.b[1]} vs ${s.a[0]}–${s.a[1]}`;
+}
+async function renderPanel(el, ctx) {
+    const { s, m, f, unit, shown, byLgd } = ctx;
+    if (!s.district) {
+        el.innerHTML = `<div class="panel-empty"><p class="t-lead">Select a district on the map, or search for one.</p><p class="soft">Each district panel shows the readings for the period on the map, its rank among ${ctx.districts.length}, and its full record since ${f.years[0]}.</p></div>`;
+        return;
+    }
+    const d = byLgd[s.district];
+    const v = shown[s.district];
+    // rank among districts (numeric metrics)
+    let rankLine = '';
+    if (typeof v === 'number') {
+        const sorted = Object.values(shown).filter((x) => typeof x === 'number').sort((a, b) => b - a);
+        const r = sorted.indexOf(v) + 1;
+        const word = s.view === 'change' ? 'largest increase' : m.higherIs ?? 'highest';
+        rankLine = `${ordinal(r)} ${word} of ${sorted.length}`;
+    }
+    // readings: the active metric plus related ones (same period)
+    const rows = [{ label: m.short, value: fmtVal(v, m, s, unit), note: rankLine.toUpperCase() }];
+    if (s.view !== 'change') {
+        for (const id of RELATED[m.dataset].filter((x) => x !== m.id).slice(0, 3)) {
+            const rm = metricById(id);
+            try {
+                const rf = await loadMetric(m.dataset, id);
+                rows.push({ label: rm.short, value: fmtVal(viewValues(rf, s)[s.district] ?? null, rm, s, rm.unit) });
+            }
+            catch { /* skip a related metric that failed to load */ }
+        }
+    }
+    const period = periodLabel(f, s);
+    // trend: selected + compared districts, whole record
+    let chart = '';
+    if (m.breaks === 'categorical') {
+        const stops = STOPS.category, cats = m.categories;
+        chart = `<div class="cat-strip" role="img" aria-label="${esc(m.label)} for ${esc(d.name)}, every year">${f.years.map((y, i) => {
+            const c = f.values[s.district][i];
+            return `<span title="${y}: ${c ?? 'no data'}" style="background:${c ? stops[cats.indexOf(c)] : 'transparent'}"${y === s.year ? ' class="is-year"' : ''}></span>`;
+        }).join('')}</div><p class="label soft cat-axis"><span>${f.years[0]}</span><span>${f.years[f.years.length - 1]}</span></p>`;
+    }
+    else {
+        const ids = [s.district, ...s.compare];
+        const dark = m.scale === 'wet' || m.scale === 'wetdry' ? STOPS.wet : m.scale === 'dry' ? STOPS.dry : STOPS.warm;
+        const series = ids.map((id, i) => ({ label: byLgd[id].name, values: f.values[id], style: (i === 0 ? 'ink' : 'ink'), dash: DASHES[i] || undefined, color: i === 0 ? undefined : dark[4 - (i - 1)] }));
+        chart = renderTrend({
+            years: f.years, series, width: 440, height: 200, unit, decimals: m.decimals,
+            baseline: baselineOf(m.dataset), highlight: s.view === 'year' ? s.year : undefined,
+            rolling: ids.length === 1 ? 10 : undefined, zeroLine: m.breaks !== 'quantile',
+            title: `${m.label}, ${ids.map((i) => byLgd[i].name).join(', ')}`,
+        });
+    }
+    const key = [s.district, ...s.compare].map((id, i) => `<li><svg width="28" height="8" aria-hidden="true"><line x1="0" y1="4" x2="28" y2="4" stroke="${i === 0 ? '#16181C' : 'currentColor'}" stroke-width="1.5" stroke-dasharray="${DASHES[i]}"/></svg>${esc(byLgd[id].name)}${i > 0 ? ` <button type="button" class="chip-x" data-remove="${id}" aria-label="Remove ${esc(byLgd[id].name)} from compare">×</button>` : ''}</li>`).join('');
+    const options = ctx.districts.filter((x) => x.lgd !== s.district && !s.compare.includes(x.lgd)).map((x) => `<option value="${x.lgd}">${esc(x.name)}</option>`).join('');
+    el.innerHTML = `
+    <div class="dp-head">
+      <h2 class="display dp-name">${esc(d.name)}</h2>
+      <button type="button" class="label dp-clear" data-clear>Clear</button>
+    </div>
+    <p class="label soft">LGD ${d.lgd} · CENSUS 2011 BOUNDARY${d.name === 'Thane' ? ' · INCLUDES PALGHAR' : ''}</p>
+    <section class="panel dp-readings" aria-label="Readings"><span class="panel-plus" aria-hidden="true">+</span>
+      <h3 class="label panel-title">${esc(d.name.toUpperCase())} · ${esc(period.toUpperCase())}</h3>
+      <dl class="panel-rows">${rows.map((r) => `<div class="panel-row"><dt class="label soft">${esc(r.label)}</dt><dd class="panel-val num">${esc(r.value)}${r.note ? `<span class="label soft panel-note">${esc(r.note)}</span>` : ''}</dd></div>`).join('')}</dl>
+    </section>
+    <figure class="dp-trend">
+      <p class="label">${esc(m.short)} · ${f.years[0]}–${f.years[f.years.length - 1]}</p>
+      ${chart}
+      <ul class="dp-key mono">${key}</ul>
+      <figcaption class="source label">SOURCE: ${esc(ctx.source.toUpperCase())}${m.breaks !== 'categorical' ? ` · SHADED BAND = ${baselineOf(m.dataset).join('–')} NORMAL${s.compare.length ? '' : ' · BLUE = 10-YEAR ROLLING MEAN'}` : ''}</figcaption>
+    </figure>
+    <div class="dp-compare">
+      <label class="label" for="dp-add">Compare with (up to 3)</label>
+      <select id="dp-add" ${s.compare.length >= 3 ? 'disabled' : ''}><option value="">Add a district…</option>${options}</select>
+    </div>
+    <p><button type="button" class="btn" data-dl><span>Download ${esc(d.name)} rows (CSV)</span><span class="btn-arrow" aria-hidden="true">↓</span></button></p>`;
+    el.querySelector('[data-clear]').addEventListener('click', ctx.onClear);
+    el.querySelector('#dp-add').addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (v)
+            ctx.onCompare(v, null);
+    });
+    el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => ctx.onCompare(null, b.dataset.remove)));
+    el.querySelector('[data-dl]').addEventListener('click', () => downloadDistrict(m.dataset, s.district, d.name));
+}
+const csvCache = new Map();
+async function downloadDistrict(ds, lgd, name) {
+    const meta = datasets.find((x) => x.slug === ds);
+    const url = u(`/data/${ds}/${meta.folder}.csv`);
+    if (!csvCache.has(url))
+        csvCache.set(url, fetch(url).then((r) => r.text()));
+    const text = await csvCache.get(url);
+    const lines = text.split(/\r?\n/);
+    const head = lines[0].split(',');
+    const col = head.indexOf('lgd_district_code');
+    const rows = lines.slice(1).filter((l) => l && l.split(',')[col] === lgd);
+    const blob = new Blob([[lines[0], ...rows].join('\n') + '\n'], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${meta.folder}_${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+
+async function boot() {
+    const root = document.querySelector('[data-atlas]');
+    const $ = (sel) => root.querySelector(sel);
+    const $$ = (sel) => Array.from(root.querySelectorAll(sel));
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const mobile = matchMedia('(max-width: 899px)');
+    const [districts, geo, stateGeo, stats] = await Promise.all([
+        fetch(u('/data/districts.json')).then((r) => r.json()),
+        fetch(u('/data/districts.geojson')).then((r) => r.json()),
+        fetch(u('/data/state.geojson')).then((r) => r.json()),
+        fetch(u('/data/stats.json')).then((r) => r.json()),
+    ]);
+    const byLgd = Object.fromEntries(districts.map((d) => [d.lgd, d]));
+    const names = Object.fromEntries(districts.map((d) => [d.lgd, d.name]));
+    const centroids = Object.fromEntries(districts.map((d) => [d.lgd, [d.cx, d.cy]]));
+    const lastYear = (ds) => stats.datasets.find((d) => d.slug === ds)?.last_year ?? 2024;
+    const firstYear = (ds) => stats.datasets.find((d) => d.slug === ds)?.first_year ?? 1951;
+    let s = fromURL(lastYear, new Set(Object.keys(byLgd)));
+    let f;
+    let shown = {};
+    let colors = {};
+    let scale;
+    /* ---------------------------------------------------------- controls ---- */
+    function syncControls() {
+        $$('[data-ds]').forEach((b) => { const on = b.dataset.ds === s.dataset; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+        $$('[data-metric-item]').forEach((li) => { li.hidden = li.dataset.dataset !== s.dataset; });
+        $$('input[name="metric"]').forEach((i) => { i.checked = i.value === s.metric; });
+        const cat = metricById(s.metric).breaks === 'categorical';
+        $$('input[name="view"]').forEach((i) => { i.checked = i.value === s.view; i.disabled = cat && i.value !== 'year'; });
+        $('[data-change-periods]').hidden = s.view !== 'change';
+        const [fa, la] = [firstYear(s.dataset), lastYear(s.dataset)];
+        $$('[data-period]').forEach((i) => {
+            const [p, k] = i.dataset.period.split('.');
+            i.min = String(fa);
+            i.max = String(la);
+            i.value = String(s[p][+k]);
+        });
+        const div = metricById(s.metric).breaks !== 'quantile';
+        $$('input[name="classes"]').forEach((i) => { i.checked = i.value === s.classes; i.disabled = div || s.view === 'change'; });
+        $('[data-classes-note]').hidden = !(div || s.view === 'change');
+        $('[data-toggle="sketch"]').setAttribute('aria-pressed', String(s.sketch));
+        $('[data-toggle="table"]').setAttribute('aria-pressed', String(s.table));
+        const m = metricById(s.metric);
+        $('[data-help]').innerHTML = `<span class="label mnote-label">${m.short}</span>${m.help}${m.caveat ? ` <em>${m.caveat}</em>` : ''}`;
+    }
+    /* ------------------------------------------------------------ update ---- */
+    let atlas;
+    let pending = 0;
+    async function update(opts = {}) {
+        const ticket = ++pending;
+        const m = metricById(s.metric);
+        f = await loadMetric(s.dataset, s.metric);
+        if (ticket !== pending)
+            return;
+        shown = viewValues(f, s);
+        scale = scaleFor(f, m, s, shown);
+        colors = Object.fromEntries(Object.entries(shown).map(([k, v]) => [k, v == null ? null : scale.color(v)]));
+        atlas.setColors(colors, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
+        atlas.setSelection(s.district, s.compare, names, centroids);
+        const period = periodLabel(f, s);
+        $('[data-map-title]').textContent = s.view === 'change' ? `Change in ${m.label.replace(/ \(.*\)$/, '').toLowerCase()}` : m.label;
+        $('[data-map-period]').textContent = s.view === 'decade' ? `${decadeLabel(s.year, f)} average` : period;
+        const legendTitle = `${s.view === 'change' ? 'Change' : m.short}${scale.unit && scale.unit !== 'SPI' ? ' · ' + scale.unit.toUpperCase() : ''}`;
+        renderLegend($('[data-legend]'), legendTitle, scale, Object.values(colors).some((c) => c == null));
+        const ds = datasets.find((d) => d.slug === s.dataset);
+        const source = `${ds.source}, ${f.years[0]}–${f.years[f.years.length - 1]} · district indices computed by Bharatnomy`;
+        $('[data-source]').innerHTML = `SOURCE: ${source.toUpperCase()} · ${m.label.toUpperCase()} · ${period.toUpperCase()} · <a href="${u(`/datasets/${s.dataset}`)}">DATASET</a>`;
+        ruler.set(s.year, f.state_mean, f.years, s.view === 'change');
+        // views
+        const showSketch = s.sketch && !s.table;
+        $('[data-map]').hidden = showSketch || s.table;
+        $('[data-sketch]').hidden = !showSketch;
+        $('[data-table]').hidden = !s.table;
+        if (showSketch)
+            renderSketch($('[data-sketch]'), geo, stateGeo, shown, colors, s.district, s.compare, select);
+        const rows = districts.map((d) => {
+            const v = shown[d.lgd];
+            const b = s.view !== 'change' && typeof v === 'number' ? baselineMean(f, d.lgd, s.dataset) : null;
+            return { lgd: d.lgd, name: d.name, value: v, change: b == null || typeof v !== 'number' ? null : v - b };
+        });
+        const bl = baselineOf(s.dataset).join('–');
+        if (s.table)
+            renderTable($('[data-table]'), rows, m, s, scale.unit, colors, bl, select);
+        if (root.dataset.tab === 'table')
+            renderTable($('[data-table-m]'), rows, m, s, scale.unit, colors, bl, select);
+        if (!s.table && !showSketch)
+            requestAnimationFrame(() => atlas.resize());
+        if (opts.panel !== false)
+            await renderPanel($('[data-panel]'), {
+                s, m, f, unit: scale.unit, shown, districts, byLgd, source,
+                onCompare: (add, remove) => {
+                    if (add && !s.compare.includes(add) && s.compare.length < 3)
+                        s.compare.push(add);
+                    if (remove)
+                        s.compare = s.compare.filter((c) => c !== remove);
+                    commit({ panel: true });
+                },
+                onClear: () => { s.district = null; s.compare = []; commit({}); },
+            });
+        // screen-reader summary
+        const ranked = Object.entries(shown).filter(([, v]) => typeof v === 'number').sort((a, b) => b[1] - a[1]);
+        const sr = ranked.length
+            ? `${m.label}, ${period}. Highest: ${names[ranked[0][0]]}, ${fmtVal(ranked[0][1], m, s, scale.unit)}. Lowest: ${names[ranked[ranked.length - 1][0]]}, ${fmtVal(ranked[ranked.length - 1][1], m, s, scale.unit)}.`
+            : `${m.label}, ${period}.`;
+        clearTimeout(window.__srT);
+        window.__srT = setTimeout(() => { $('[data-sr]').textContent = sr; }, 400);
+        toURL(s);
+    }
+    function commit(opts = {}) { syncControls(); update(opts); }
+    function select(lgd) {
+        s.district = lgd;
+        if (lgd)
+            s.compare = s.compare.filter((c) => c !== lgd);
+        if (lgd && mobile.matches)
+            setTab('district');
+        commit({});
+    }
+    /* ------------------------------------------------------------ events ---- */
+    $$('[data-ds]').forEach((b) => {
+        b.addEventListener('click', () => {
+            if (b.dataset.ds === s.dataset)
+                return;
+            const keep = { district: s.district, compare: s.compare, view: s.view, year: s.year, sketch: s.sketch, table: s.table, classes: s.classes };
+            s = { ...defaults(b.dataset.ds, lastYear(b.dataset.ds)), ...keep };
+            s.year = Math.min(s.year, lastYear(s.dataset));
+            commit({ animate: true });
+        });
+        b.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')
+                return;
+            const tabs = $$('[data-ds]');
+            const i = tabs.indexOf(b);
+            const n = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+            n.focus();
+            n.click();
+        });
+    });
+    root.addEventListener('change', (e) => {
+        const t = e.target;
+        if (t.name === 'metric') {
+            s.metric = t.value;
+            if (metricById(s.metric).breaks === 'categorical')
+                s.view = 'year';
+            commit({ animate: true });
+        }
+        if (t.name === 'view') {
+            s.view = t.value;
+            commit({ animate: true });
+        }
+        if (t.name === 'classes') {
+            s.classes = t.value;
+            commit({ animate: true });
+        }
+        if (t.dataset.period) {
+            const [p, k] = t.dataset.period.split('.');
+            const v = Math.max(firstYear(s.dataset), Math.min(lastYear(s.dataset), Math.round(+t.value || 0)));
+            const arr = [...s[p]];
+            arr[+k] = v;
+            if (arr[0] > arr[1])
+                arr.reverse();
+            s[p] = arr;
+            commit({ animate: true });
+        }
+    });
+    $$('[data-toggle]').forEach((b) => b.addEventListener('click', () => {
+        const k = b.dataset.toggle;
+        s[k] = !s[k];
+        if (k === 'sketch' && s.sketch)
+            s.table = false;
+        if (k === 'table' && s.table)
+            s.sketch = false;
+        commit({});
+    }));
+    $('[data-png]').addEventListener('click', () => {
+        const m = metricById(s.metric);
+        savePNG(s.sketch ? null : atlas.map.getCanvas(), s.sketch ? $('[data-sketch] svg') : null, $('[data-map-title]').textContent ?? m.label, `Maharashtra · ${$('[data-map-period]').textContent}`, scale, `${s.view === 'change' ? 'Change' : m.short}${scale.unit ? ' · ' + scale.unit : ''}`, $('[data-source]').textContent ?? '');
+    });
+    // search (native datalist: keyboard friendly)
+    const search = $('#district-search');
+    const pick = () => {
+        const q = search.value.trim().toLowerCase();
+        const d = districts.find((x) => x.name.toLowerCase() === q) ?? districts.find((x) => x.name.toLowerCase().startsWith(q));
+        if (d && q) {
+            select(d.lgd);
+            search.value = '';
+        }
+    };
+    search.addEventListener('change', pick);
+    search.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            pick();
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !e.target.closest('input, select, textarea') && s.district)
+            select(null);
+    });
+    // play: about four years a second; never starts on its own
+    const play = $('[data-play]');
+    let timer = 0;
+    const PLAY_STEP = 900, PLAY_FADE = 800;
+    const stopPlay = () => { clearInterval(timer); timer = 0; $('[data-ruler]').classList.remove('is-playing'); play.setAttribute('aria-pressed', 'false'); play.querySelector('span').textContent = 'Play'; };
+    play.addEventListener('click', () => {
+        if (timer)
+            return stopPlay();
+        if (s.view === 'change')
+            return;
+        if (s.year >= lastYear(s.dataset))
+            s.year = firstYear(s.dataset);
+        play.setAttribute('aria-pressed', 'true');
+        play.querySelector('span').textContent = 'Pause';
+        $('[data-ruler]').classList.add('is-playing');
+        // one year about every 0.9 s; colours crossfade over most of each step so it reads as a glide
+        timer = window.setInterval(() => {
+            if (s.year >= lastYear(s.dataset))
+                return stopPlay();
+            s.year++;
+            update({ panel: !!s.district, fade: reduce ? 0 : PLAY_FADE });
+        }, PLAY_STEP);
+    });
+    // mobile bottom sheet tabs
+    function setTab(t) {
+        root.dataset.tab = t;
+        $$('[data-tab-btn]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tabBtn === t)));
+        if (t === 'table')
+            update({ panel: false });
+    }
+    $$('[data-tab-btn]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tabBtn)));
+    /* --------------------------------------------------------------- boot ---- */
+    const tip = $('[data-tip]');
+    const ruler = createRuler($('[data-ruler]'), (year, scrubbing) => {
+        stopPlay();
+        s.year = year;
+        update({ panel: !scrubbing });
+    });
+    atlas = await createMap($('[data-map]'), geo, stateGeo, {
+        onHover: (lgd, x, y) => {
+            if (!lgd) {
+                tip.hidden = true;
+                return;
+            }
+            const m = metricById(s.metric);
+            tip.textContent = `${names[lgd].toUpperCase()} · ${fmtVal(shown[lgd] ?? null, m, s, scale?.unit ?? m.unit).toUpperCase()}`;
+            tip.hidden = false;
+            tip.style.transform = `translate(${Math.round(x + 14)}px, ${Math.round(y - 30)}px)`;
+        },
+        onClick: (lgd) => select(lgd),
+    });
+    root.classList.add('is-ready');
+    syncControls();
+    await update({});
+}
+boot().catch((err) => {
+    console.error(err);
+    const el = document.querySelector('[data-atlas-error]');
+    if (el) {
+        el.removeAttribute('hidden');
+    }
+});
+
+
+// LeaderLine: dashed 1px ink line with an open-circle end, from a MarginNote to
+// the element it annotates. Positioned from geometry, recalculated on resize.
+// Hidden below 900px (CSS), where notes sit inline instead.
+const NS = 'http://www.w3.org/2000/svg';
+function anchor(r, side, sx, sy) {
+    switch (side) {
+        case 'left': return [r.left + sx, r.top + r.height / 2 + sy];
+        case 'right': return [r.right + sx, r.top + r.height / 2 + sy];
+        case 'top': return [r.left + r.width / 2 + sx, r.top + sy];
+        case 'bottom': return [r.left + r.width / 2 + sx, r.bottom + sy];
+        default: return [r.left + r.width / 2 + sx, r.top + r.height / 2 + sy];
+    }
+}
+function drawLeaders(root = document) {
+    const notes = Array.from(root.querySelectorAll('[data-leader-to]')).filter((n) => n.dataset.leaderTo);
+    let svg = document.getElementById('leader-layer');
+    if (!svg) {
+        svg = document.createElementNS(NS, 'svg');
+        svg.id = 'leader-layer';
+        svg.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(svg);
+    }
+    const W = document.documentElement.scrollWidth, H = document.documentElement.scrollHeight;
+    svg.setAttribute('width', String(W));
+    svg.setAttribute('height', String(H));
+    svg.replaceChildren();
+    if (innerWidth < 900)
+        return;
+    const sx = scrollX, sy = scrollY;
+    for (const note of notes) {
+        const target = document.getElementById(note.dataset.leaderTo);
+        if (!target || note.offsetParent === null || target.getClientRects().length === 0)
+            continue;
+        if (note.closest('[data-leaders-off]'))
+            continue;
+        const nr = note.getBoundingClientRect(), tr = target.getBoundingClientRect();
+        const tc = [tr.left + tr.width / 2, tr.top + tr.height / 2];
+        const nc = [nr.left + nr.width / 2, nr.top + nr.height / 2];
+        const horizontal = tc[0] > nr.right || tc[0] < nr.left;
+        const path = document.createElementNS(NS, 'path');
+        let x2, y2;
+        if (horizontal) {
+            // Route: out of the note's first line, along the gutter beside the
+            // annotated block, then under the target's line of text to the target.
+            const right = tc[0] > nc[0];
+            const block = target.closest('p, li, figure, svg, h1, h2, h3, [data-leader-block]') ?? target;
+            const br = block.getBoundingClientRect();
+            const x1 = (right ? nr.right + 8 : nr.left - 8) + sx;
+            const y1 = nr.top + 12 + sy;
+            let gx = right ? Math.max(br.left - 14, nr.right + 16) : Math.min(br.right + 14, nr.left - 16);
+            gx += sx;
+            const at = note.dataset.leaderAt || 'bottom';
+            [x2, y2] = at === 'bottom' ? [tc[0] + sx, tr.bottom + 3 + sy] : anchor(tr, at, sx, sy);
+            path.setAttribute('d', `M${x1},${y1} H${gx} V${y2} H${x2}`);
+        }
+        else {
+            // note directly above or below: straight drop
+            const below = tc[1] > nc[1];
+            const x1 = Math.min(Math.max(tc[0], nr.left + 12), nr.right - 12) + sx;
+            const y1 = (below ? nr.bottom + 8 : nr.top - 8) + sy;
+            [x2, y2] = [tc[0] + sx, (below ? tr.top - 3 : tr.bottom + 3) + sy];
+            path.setAttribute('d', `M${x1},${y1} V${(y1 + y2) / 2} H${x2} V${y2}`);
+        }
+        path.setAttribute('class', 'leader');
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', String(x2));
+        dot.setAttribute('cy', String(y2));
+        dot.setAttribute('r', '3');
+        dot.setAttribute('class', 'leader-end');
+        if (note.closest('.ground-ink')) {
+            path.classList.add('leader--inv');
+            dot.classList.add('leader--inv');
+        }
+        svg.append(path, dot);
+    }
+}
+function initLeaders() {
+    let raf = 0;
+    const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => drawLeaders()); };
+    redraw();
+    addEventListener('resize', redraw);
+    addEventListener('load', redraw);
+    document.fonts?.ready.then(redraw);
+    if ('ResizeObserver' in window)
+        new ResizeObserver(redraw).observe(document.body);
+    window.__redrawLeaders = redraw;
+}
+
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Entrances: 14px rise, staggered via --d set in markup.
+const rise = document.querySelectorAll('.rise');
+if (reduce || !('IntersectionObserver' in window)) {
+    rise.forEach((el) => el.classList.add('is-in'));
+}
+else {
+    const io = new IntersectionObserver((entries) => {
+        for (const e of entries)
+            if (e.isIntersecting) {
+                e.target.classList.add('is-in');
+                io.unobserve(e.target);
+            }
+    }, { rootMargin: '0px 0px -8% 0px' });
+    rise.forEach((el) => io.observe(el));
+}
+initLeaders();
+
+    </script>
+  </body>
+</html>
+<style is:global>
+/* ===== Page styles: design tokens ===== */
+/* DESIGN.md §2. Every colour, size and rhythm on the site comes from here. */
+:root {
+  /* colour: one accent, by rule */
+  --paper: #F2F3EF;
+  --paper-raised: #FBFBF8;
+  --paper-back: color-mix(in srgb, #F2F3EF 96%, #16181C);   /* footer "back cover" */
+  --grid-minor: rgba(22, 24, 28, 0.02);
+  --grid-major: rgba(22, 24, 28, 0.05);
+  --ink: #16181C;
+  --ink-soft: #4C535C;
+  --ink-faint: rgba(22, 24, 28, 0.32);   /* hairlines and ticks only, never text */
+  --accent: #2346C7;
+  --accent-wash: rgba(35, 70, 199, 0.14);
+  --accent-ink: #F7F8F4;
+  --rule-blue: rgba(35, 70, 199, 0.13);  /* index-card ruling */
+
+  /* lens cardstock (categorical: tabs, chapter markers, stickers only) */
+  --lens-clm: #A9432F;  --lens-clm-ink: var(--paper);
+  --lens-eng: #D9A21B;  --lens-eng-ink: var(--ink);
+  --lens-mac: #4A7556;  --lens-mac-ink: var(--paper);
+  --lens-eqt: #3F5F8F;  --lens-eqt-ink: var(--paper);
+  --lens-com: #7D4E7A;  --lens-com-ink: var(--paper);
+
+  /* lens tints: light grounds for sections, cards and panels (colour pass, 19 Nov 2026) */
+  --tint-clm: #F5E4DE;
+  --tint-eng: #F8EED2;
+  --tint-mac: #E2ECE3;
+  --tint-eqt: #DFE6F0;
+  --tint-com: #EFE3ED;
+
+  /* type */
+  --f-display: "Big Shoulders Display", "Archivo", system-ui, sans-serif;
+  --f-text: "Geist", system-ui, sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --t-mega: clamp(4.5rem, 14vw, 13rem);
+  --t-xl: clamp(3.25rem, 2rem + 4.2vw, 6rem);
+  --t-l: clamp(2rem, 1.5rem + 1.6vw, 3.2rem);
+  --t-m: clamp(1.35rem, 1.15rem + 0.6vw, 1.9rem);
+  --t-body: 1.0625rem;
+  --t-small: 0.9375rem;
+  --t-label: 0.72rem;
+  --measure: 62ch;
+
+  --track-display: -0.012em;
+  --track-label: 0.08em;
+
+  /* rhythm: 4px base; the paper grid is 8px minor / 40px major */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 24px;
+  --s-6: 32px; --s-7: 40px; --s-8: 56px; --s-9: 80px; --s-10: 120px; --s-11: 160px;
+  --grid: 40px;
+  --gutter: clamp(16px, 4vw, 40px);
+  --page-max: 1440px;
+
+  /* lines */
+  --hair: 1px solid var(--ink);
+  --hair-soft: 1px solid var(--ink-faint);
+  --cut: 1px dashed var(--ink);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* Inverted ground (home chapter IV): two-stop accent, same hue */
+.ground-ink {
+  --paper-local: var(--ink);
+  --ink: #F2F3EF;
+  --ink-soft: #B9BFC7;
+  --ink-faint: rgba(242, 243, 239, 0.34);
+  --accent: #93A9F5;
+  --accent-wash: rgba(147, 169, 245, 0.22);
+  --grid-minor: rgba(242, 243, 239, 0.02);
+  --grid-major: rgba(242, 243, 239, 0.05);
+  background-color: #16181C;
+  color: var(--ink);
+}
+
+
+/* ===== Page styles: base ===== */
+/* DESIGN.md §3 and §7: the page ground and browser surfaces. */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body, h1, h2, h3, h4, p, figure, blockquote, dl, dd, ul, ol { margin: 0; }
+ul[class], ol[class] { list-style: none; padding: 0; }
+img, svg { display: block; max-width: 100%; }
+button, input, select { font: inherit; color: inherit; }
+
+html { background: var(--paper); color-scheme: light; }
+
+body {
+  min-height: 100vh;
+  font-family: var(--f-text);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--ink);
+  caret-color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+  /* graph paper: hard-stop hairlines, 8px minor, 40px major (not a gradient fill) */
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+  background-size: var(--grid) var(--grid), var(--grid) var(--grid), 8px 8px, 8px 8px;
+  background-position: -1px -1px;
+}
+
+/* paper grain: fixed noise, behind everything, does not move on scroll */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.02;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+[hidden] { display: none !important; }
+
+::selection { background: var(--accent-wash); color: inherit; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+a {
+  color: var(--accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-thickness 120ms linear;
+}
+a:hover { text-decoration-thickness: 2px; }
+a.ext::after { content: " ↗"; font-family: var(--f-mono); font-size: 0.8em; }
+
+/* type roles */
+.display, h1, h2 {
+  font-family: var(--f-display);
+  font-weight: 800;
+  letter-spacing: var(--track-display);
+  line-height: 0.94;
+  text-wrap: balance;
+}
+h3, h4 { font-family: var(--f-text); font-weight: 600; line-height: 1.25; text-wrap: balance; }
+p, li { text-wrap: pretty; }
+.t-mega { font-size: var(--t-mega); line-height: 0.86; letter-spacing: -0.02em; font-weight: 900; }
+.t-xl { font-size: var(--t-xl); }
+.t-l { font-size: var(--t-l); line-height: 0.98; font-weight: 700; }
+.t-m { font-size: var(--t-m); line-height: 1.1; font-weight: 700; }
+.t-lead { font-size: clamp(1.2rem, 1.05rem + 0.5vw, 1.45rem); line-height: 1.45; }
+.measure { max-width: var(--measure); }
+.label, .mono {
+  font-family: var(--f-mono);
+  font-size: var(--t-label);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+.mono { text-transform: none; letter-spacing: 0; font-size: 0.8125rem; font-weight: 400; }
+.soft { color: var(--ink-soft); }
+.accent { color: var(--accent); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* layout: 12 columns snapped to the 40px major grid where possible */
+.sheet {
+  width: 100%;
+  max-width: var(--page-max);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: var(--s-5);
+}
+@media (max-width: 899px) {
+  .sheet { grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: var(--s-4); }
+}
+
+/* full-bleed colour grounds without extra markup */
+.bleed { box-shadow: 0 0 0 100vmax var(--bleed); clip-path: inset(0 -100vmax); background: var(--bleed); }
+.bleed-clm { --bleed: var(--tint-clm); } .bleed-eng { --bleed: var(--tint-eng); } .bleed-mac { --bleed: var(--tint-mac); }
+.bleed-eqt { --bleed: var(--tint-eqt); } .bleed-com { --bleed: var(--tint-com); }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.skip {
+  position: absolute; left: var(--s-4); top: -100px; z-index: 50;
+  background: var(--ink); color: var(--paper); padding: var(--s-2) var(--s-4);
+}
+.skip:focus { top: var(--s-4); }
+
+/* entrance: 14px rise, 600ms, ease-out. JS adds .is-in; no JS = visible */
+.js .rise { opacity: 0; transform: translateY(14px); }
+.js .rise.is-in { opacity: 1; transform: none; transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out); transition-delay: var(--d, 0ms); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .js .rise { opacity: 1; transform: none; }
+}
+
+
+/* ===== Page styles: visual elements ===== */
+/* DESIGN.md §4: every component. Paper, ink, square corners, no soft shadows. */
+
+/* ---------------------------------------------------------- tape (shared) */
+.tape {
+  position: absolute;
+  width: 64px; height: 20px;
+  top: -10px; right: 14px;
+  background: rgba(22, 24, 28, 0.06);
+  border-left: 1px dashed rgba(22, 24, 28, 0.14);
+  border-right: 1px dashed rgba(22, 24, 28, 0.14);
+  transform: rotate(-7deg);
+  pointer-events: none;
+}
+.tape--card { left: 22px; right: auto; transform: rotate(-4deg); width: 84px; }
+
+/* ----------------------------------------------------------- StickerLabel */
+.sticker {
+  position: relative;
+  display: inline-block;
+  font-family: var(--f-mono);
+  font-size: var(--t-label);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  line-height: 1.2;
+  padding: 6px 10px 5px;
+  border: var(--hair);
+  background: var(--paper-raised);
+  color: var(--ink);
+  transform: rotate(var(--tilt, 0deg));
+  white-space: nowrap;
+}
+.sticker--ink { background: var(--ink); color: var(--paper); }
+.sticker--accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.sticker--clm { background: var(--lens-clm); color: var(--lens-clm-ink); }
+.sticker--eng { background: var(--lens-eng); color: var(--lens-eng-ink); }
+.sticker--mac { background: var(--lens-mac); color: var(--lens-mac-ink); }
+.sticker--eqt { background: var(--lens-eqt); color: var(--lens-eqt-ink); }
+.sticker--com { background: var(--lens-com); color: var(--lens-com-ink); }
+.sticker--dashed { background: transparent; border-style: dashed; }
+.sticker .tape { width: 34px; height: 13px; top: -8px; right: -10px; transform: rotate(32deg); }
+
+/* -------------------------------------------------- MarginNote + leaders */
+.mnote {
+  font-family: var(--f-text);
+  font-style: italic;
+  font-size: var(--t-small);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: 30ch;
+}
+.mnote-label { display: block; font-style: normal; margin-bottom: var(--s-1); color: var(--ink); }
+#leader-layer { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 5; overflow: visible; }
+.leader { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; }
+.leader-end { fill: var(--paper); stroke: var(--ink); stroke-width: 1; }
+.leader--inv { stroke: #F2F3EF; }
+.leader-end.leader--inv { fill: #16181C; }
+@media (max-width: 899px) {
+  #leader-layer { display: none; }
+  .mnote { max-width: none; border-left: 1px dashed var(--ink-faint); padding-left: var(--s-3); }
+}
+
+/* ------------------------------------------------------------ Highlighter */
+.hl { position: relative; display: inline-block; isolation: isolate; }
+.hl-mark { position: absolute; left: -0.07em; top: 0.16em; width: calc(100% + 0.14em); max-width: none; height: 0.7em; z-index: -1; overflow: visible; }
+/* one stroke per word: line breaks are unknown at build time, so no stroke over spaces */
+.hl-mark path { fill: var(--accent-wash); }
+
+/* ------------------------------------------------------------------ Folio */
+.folio { display: flex; flex-wrap: wrap; gap: 0 var(--s-2); color: var(--ink-soft); }
+.folio-sep { color: var(--ink-faint); }
+.folio--sticky { position: sticky; top: var(--s-5); }
+
+/* --------------------------------------------------------- InstrumentPanel */
+.panel {
+  position: relative;
+  border: var(--hair);
+  background: var(--paper-raised);
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  max-width: 340px;
+}
+.panel[data-tone] { background: var(--tint); } .panel[data-tone="clm"] { --tint: var(--tint-clm); } .panel[data-tone="eng"] { --tint: var(--tint-eng); } .panel[data-tone="mac"] { --tint: var(--tint-mac); } .panel[data-tone="eqt"] { --tint: var(--tint-eqt); }
+.panel-plus { position: absolute; top: 2px; right: 8px; font-family: var(--f-mono); font-size: 1rem; line-height: 1; }
+.panel-title { margin-bottom: var(--s-3); padding-bottom: var(--s-2); border-bottom: var(--hair); padding-right: var(--s-5); }
+.panel-rows { display: grid; gap: var(--s-2); }
+.panel-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--s-4); border-bottom: 1px dotted var(--ink-faint); padding-bottom: var(--s-1); }
+.panel-row:last-child { border-bottom: 0; }
+.panel-val { font-family: var(--f-mono); font-size: 0.95rem; font-weight: 500; text-align: right; }
+.panel-note { display: block; font-size: 0.62rem; }
+.panel-foot { margin-top: var(--s-3); }
+
+/* ------------------------------------------------------------------ Ticker */
+.ticker {
+  border-top: var(--hair);
+  border-bottom: var(--hair);
+  overflow: hidden;
+  background: var(--lens-eng);
+  color: var(--ink);
+  padding: 10px 0 9px;
+}
+.ticker-track { display: flex; width: max-content; animation: ticker var(--ticker-dur, 80s) linear infinite; }
+.ticker:hover .ticker-track, .ticker:focus .ticker-track, .ticker:focus-within .ticker-track { animation-play-state: paused; }
+.ticker-list { display: flex; gap: 0; padding: 0; margin: 0; list-style: none; white-space: nowrap; }
+.ticker-list li { padding: 0 var(--s-5); border-right: 1px solid rgba(22, 24, 28, 0.35); }
+@keyframes ticker { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track { animation: none; width: auto; }
+  .ticker-list { flex-wrap: wrap; white-space: normal; row-gap: var(--s-2); }
+  .ticker-dup { display: none; }
+}
+
+/* ----------------------------------------------------------------- LensTab */
+.lens { position: relative; padding-top: 29px; }
+.lens-tab {
+  position: absolute; top: 0; left: min(var(--tab-offset, 0%), calc(100% - 150px));
+  height: 30px; min-width: 132px;
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: 0 var(--s-4);
+  border: var(--hair); border-bottom: 0;
+  font-family: var(--f-mono); font-weight: 500; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.lens-page {
+  position: relative;
+  border: var(--hair);
+  border-top-width: 4px;
+  background: var(--paper-raised);
+  padding: var(--s-7) var(--s-6) var(--s-6);
+  min-height: 300px;
+}
+.lens-status { position: absolute; top: var(--s-4); right: var(--s-4); }
+.lens-name { max-width: 14ch; margin-bottom: var(--s-4); }
+.lens-line { max-width: 44ch; color: var(--ink-soft); margin-bottom: var(--s-5); }
+.lens-focus { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); }
+.lens-focus li { border-top: var(--hair); padding-top: 4px; }
+.lens--clm .lens-tab { background: var(--lens-clm); color: var(--lens-clm-ink); } .lens--clm .lens-page { border-top-color: var(--lens-clm); background: var(--tint-clm); }
+.lens--eng .lens-tab { background: var(--lens-eng); color: var(--lens-eng-ink); } .lens--eng .lens-page { border-top-color: var(--lens-eng); background: var(--tint-eng); }
+.lens--mac .lens-tab { background: var(--lens-mac); color: var(--lens-mac-ink); } .lens--mac .lens-page { border-top-color: var(--lens-mac); background: var(--tint-mac); }
+.lens--eqt .lens-tab { background: var(--lens-eqt); color: var(--lens-eqt-ink); } .lens--eqt .lens-page { border-top-color: var(--lens-eqt); background: var(--tint-eqt); }
+.lens--com .lens-tab { background: var(--lens-com); color: var(--lens-com-ink); } .lens--com .lens-page { border-top-color: var(--lens-com); background: var(--tint-com); }
+
+/* ------------------------------------------------------------- SpecimenTag */
+.tag {
+  position: relative;
+  width: min(100%, 300px);
+  margin-top: var(--drop, 0);
+  padding: var(--s-7) var(--s-5) var(--s-5);
+  background: var(--paper-raised);
+  border: var(--hair);
+  transform: rotate(var(--tilt, 0deg));
+  transform-origin: 50% -40px;
+}
+.tag::after { content: ""; position: absolute; inset: 5px; border: 1px dashed var(--ink-faint); pointer-events: none; }
+.tag-hole {
+  position: absolute; top: 14px; left: 50%; width: 14px; height: 14px; margin-left: -7px;
+  border: var(--hair); border-radius: 50%; background: var(--paper);
+  z-index: 1;
+}
+.tag-string {
+  position: absolute; left: 50%; bottom: calc(100% - 21px); width: 1px; height: calc(48px + var(--drop, 0px));
+  background: var(--ink);
+}
+.tag:not(.tag--planned) { border-top: 6px solid var(--lens-clm); }
+.tag-code { color: var(--ink-soft); margin-bottom: var(--s-2); }
+.tag-title { font-size: 1.85rem; line-height: 0.96; margin-bottom: var(--s-3); }
+.tag-title a { color: var(--ink); text-decoration: none; }
+.tag-title a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.tag-cover { margin-bottom: var(--s-4); padding-bottom: var(--s-3); border-bottom: var(--cut); }
+.tag-facts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2) var(--s-4); margin-bottom: var(--s-4); }
+.tag-facts dt { color: var(--ink-soft); font-size: 0.62rem; }
+.tag-facts dd { font-size: 0.75rem; letter-spacing: 0.02em; }
+.tag-dl { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-family: var(--f-mono); font-size: 0.8125rem; }
+.tag--planned { background: var(--paper); border: 1px dashed var(--ink-soft); }
+.tag--planned::after { display: none; }
+.tag-note { font-size: var(--t-small); color: var(--ink-soft); line-height: 1.45; margin-top: var(--s-2); }
+.tag--planned .tag-title { color: var(--ink-soft); font-size: 1.5rem; }
+.tag--planned .tag-hole { border-color: var(--ink-soft); }
+
+/* --------------------------------------------------------------- IndexCard */
+.card {
+  position: relative;
+  background-color: var(--paper-raised);
+  background-image:
+    linear-gradient(90deg, transparent 47px, var(--ink-soft) 47px, var(--ink-soft) 48px, transparent 48px),
+    repeating-linear-gradient(transparent 0 27px, var(--rule-blue) 27px 28px);
+  background-position: 0 0, 0 0;
+  border: var(--hair);
+  padding: 34px var(--s-5) 28px 64px;
+  transform: rotate(var(--tilt, 0deg));
+  line-height: 28px;
+}
+.card[data-tone] { border-top: 6px solid var(--band); }
+.card[data-tone="clm"] { --band: var(--lens-clm); } .card[data-tone="eng"] { --band: var(--lens-eng); } .card[data-tone="mac"] { --band: var(--lens-mac); } .card[data-tone="eqt"] { --band: var(--lens-eqt); } .card[data-tone="com"] { --band: var(--lens-com); }
+.card-title { font-size: 1.75rem; line-height: 28px; font-weight: 800; padding-top: 2px; margin-bottom: 0; }
+.card-meta { color: var(--ink-soft); line-height: 28px; margin-bottom: 0; }
+.card-body { font-size: var(--t-small); line-height: 28px; }
+.card-body p + p { margin-top: 0; }
+
+/* ------------------------------------------------------------------ Button */
+.btn {
+  display: inline-flex; align-items: center; gap: var(--s-3);
+  min-height: 44px;
+  padding: 10px 18px;
+  font-family: var(--f-text); font-weight: 500; font-size: 1rem; line-height: 1.2;
+  color: var(--ink); background: var(--paper-raised);
+  border: var(--hair); border-radius: 0;
+  text-decoration: none; cursor: pointer;
+  transition: box-shadow 120ms linear, transform 120ms linear;
+}
+.btn-arrow { font-family: var(--f-mono); }
+.btn:hover, .btn.is-hover { box-shadow: 2px 2px 0 var(--ink); transform: translate(-1px, -1px); text-decoration: none; }
+.btn:focus-visible, .btn.is-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn--primary { background: var(--ink); color: var(--paper); }
+.btn--primary:hover, .btn--primary.is-hover { box-shadow: 2px 2px 0 var(--accent); }
+.btn[disabled], .btn.is-disabled { color: var(--ink-soft); border-style: dashed; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* ------------------------------------------------------------- SketchMap */
+.sketch { width: 100%; height: auto; overflow: visible; }
+.sk-hit { fill: transparent; stroke: none; }
+.sk-line { fill: none; stroke: var(--ink); stroke-width: 0.9; stroke-linecap: round; stroke-linejoin: round; }
+.sk-hatch { fill: none; stroke: var(--ink); stroke-width: 0.6; stroke-linecap: round; opacity: 0.85; }
+.sketch--color .sk-hatch { opacity: 0.4; stroke-width: 0.55; }
+.sk-d.is-selected .sk-line { stroke: var(--accent); stroke-width: 2.2; }
+.sk-d.is-selected .sk-hatch { stroke: var(--accent); }
+.wp-route { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 4 4; }
+.wp-fill { fill: var(--paper-raised); }
+.wp-ring { fill: none; stroke: var(--ink); stroke-width: 1.2; }
+.wp-n { font-family: var(--f-mono); font-size: 9.5px; font-weight: 500; fill: var(--ink); }
+.wp-label { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 3px; }
+
+/* ------------------------------------------------------------- TrendChart */
+.trendfig { margin: 0; }
+.trendfig-cap { margin-bottom: var(--s-2); }
+.trendfig-plot svg { width: 100%; height: auto; overflow: visible; }
+.trend-grid { stroke: var(--ink-faint); stroke-width: 0.5; stroke-dasharray: 1 3; }
+.trend-axis { stroke: var(--ink); stroke-width: 1; }
+.trend-zero { stroke: var(--ink); stroke-width: 0.75; }
+.trend-tick { font-family: var(--f-mono); font-size: 10px; fill: var(--ink-soft); }
+.trend-band { fill: var(--accent-wash); opacity: 0.6; }
+.trend-bandlabel { font-family: var(--f-mono); font-size: 9px; letter-spacing: 0.06em; fill: var(--ink-soft); }
+.trend-ink { fill: none; stroke: var(--ink); stroke-width: 1.1; stroke-linejoin: round; }
+.trend-faint { fill: none; stroke: var(--ink-soft); stroke-width: 1; stroke-linejoin: round; }
+.trend-pen { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.trend-roll { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.trend-hl { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 2; }
+.trend-hllabel { font-family: var(--f-mono); font-size: 10px; fill: var(--accent); font-weight: 500; }
+.trend-dot { fill: var(--paper-raised); stroke: var(--accent); stroke-width: 2; }
+
+.source { color: var(--ink-soft); margin-top: var(--s-2); font-size: 0.66rem; line-height: 1.5; text-transform: uppercase; }
+.source a { color: var(--accent); }
+
+/* ------------------------------------------------------------------ Legend */
+.legend {
+  margin: 0; display: inline-block;
+  border: var(--hair); background: var(--paper-raised);
+  padding: var(--s-3) var(--s-4);
+  transform: rotate(var(--tilt, 0deg));
+  max-width: 300px;
+}
+.legend-title { margin-bottom: var(--s-2); }
+.legend-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.legend-list li { display: grid; grid-template-columns: 22px 1fr; gap: var(--s-2); align-items: center; }
+.legend-list .mono { font-size: 0.75rem; }
+.legend-swatch { width: 22px; height: 12px; border: 0.75px solid var(--ink); }
+.legend-swatch--nodata { background: repeating-linear-gradient(45deg, var(--paper-raised) 0 2px, var(--ink-soft) 2px 3px); }
+.legend-hatch svg { color: var(--ink); }
+.legend-range { display: block !important; font-size: 0.75rem !important; margin-top: 2px !important; }
+.legend-hatch p { display: flex; justify-content: space-between; gap: var(--s-4); margin-top: var(--s-2); font-size: 0.6rem; }
+
+/* ---------------------------------------------------------- tables (shared) */
+.table-wrap { overflow-x: auto; border: var(--hair); background: var(--paper-raised); }
+table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.dense th, .dense td, .md-table th, .md-table td { text-align: left; padding: 8px 12px; border-bottom: var(--hair-soft); vertical-align: top; }
+.dense thead th, .md-table thead th { font-family: var(--f-mono); font-size: var(--t-label); font-weight: 500; letter-spacing: var(--track-label); text-transform: uppercase; border-bottom: var(--hair); background: var(--paper); position: sticky; top: 0; }
+.dense th button { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.dense th button::after { content: "↕"; color: var(--ink-faint); }
+.dense th[aria-sort="ascending"] button::after { content: "↑"; color: var(--accent); }
+.dense th[aria-sort="descending"] button::after { content: "↓"; color: var(--accent); }
+.dense th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dense .r { text-align: right; }
+.dense code, .lab code { font-family: var(--f-mono); font-size: 0.82em; }
+.dense-code { display: block; font-size: 0.72rem; margin-top: 2px; }
+.md-table { overflow-x: auto; margin: var(--s-4) 0; border: var(--hair); background: var(--paper-raised); }
+
+
+
+/* ===== Inlined from src/styles/atlas.css ===== */
+/* BN-DASH: the Atlas (MAP.md §4). */
+.atlas { max-width: var(--page-max); margin-inline: auto; padding: var(--s-5) var(--gutter) var(--s-7); }
+.atlas-head { display: grid; grid-template-columns: auto 1fr; gap: var(--s-7); align-items: end; margin-bottom: var(--s-6); overflow: hidden; }
+.atlas-title { font-size: clamp(4.5rem, 12vw, 11rem); line-height: 0.8; margin: 0 0 -0.06em -0.05em; }
+.atlas-intro { display: grid; gap: var(--s-3); justify-items: start; max-width: 60ch; padding-bottom: var(--s-2); }
+.atlas-india { font-size: var(--t-small); }
+.atlas-error { margin-bottom: var(--s-4); }
+.atlas-error .btn { width: 100%; justify-content: space-between; text-align: left; padding: var(--s-4); }
+
+.atlas-body { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: var(--s-6); align-items: start; }
+.atlas-pane-table, .atlas-tabs { display: none; }
+
+/* ------------------------------------------------------------ controls */
+.atlas-controls { display: grid; gap: var(--s-5); align-content: start; }
+.ctl { border: 0; margin: 0; padding: 0; display: grid; gap: var(--s-2); min-width: 0; }
+.ctl legend { padding: 0; margin-bottom: var(--s-2); }
+.ctl select, .atlas-search input, .periods input, .dp-compare select {
+  font: inherit; font-size: var(--t-small); background: var(--paper-raised); border: var(--hair); border-radius: 0; padding: 7px 9px; width: 100%; color: var(--ink);
+}
+.ctl select:disabled { color: var(--ink-soft); }
+.ds-tabs { display: grid; grid-template-columns: 1fr 1fr; border: var(--hair); }
+.ds-tab { font-family: var(--f-mono); font-size: var(--t-label); letter-spacing: var(--track-label); text-transform: uppercase; padding: 9px 6px; background: var(--paper-raised); border: 0; cursor: pointer; color: var(--ink); }
+.ds-tab + .ds-tab { border-left: var(--hair); }
+.ds-tab[aria-selected="true"] { background: var(--lens-clm); color: var(--lens-clm-ink); }
+.ds-tab:focus-visible { outline-offset: -4px; }
+.metric-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; border-top: var(--hair-soft); }
+.metric { display: grid; grid-template-columns: 18px 1fr; gap: var(--s-2); align-items: start; padding: 6px 2px; border-bottom: var(--hair-soft); cursor: pointer; font-size: var(--t-small); line-height: 1.35; }
+.metric input { margin: 3px 0 0; accent-color: var(--accent); }
+.metric:has(input:checked) { color: var(--accent); }
+.metric:has(input:checked) .metric-name { font-weight: 600; }
+.ctl-help { max-width: none; border-left: 2px solid var(--accent); padding-left: var(--s-3); font-size: 0.85rem; }
+.ctl-help em { display: block; margin-top: var(--s-2); }
+.seg { display: grid; gap: 2px; }
+.seg label { display: flex; gap: var(--s-2); align-items: center; font-size: var(--t-small); cursor: pointer; }
+.seg input { accent-color: var(--accent); margin: 0; }
+.seg label:has(input:disabled) { color: var(--ink-faint); cursor: not-allowed; }
+.periods { display: grid; gap: var(--s-2); margin-top: var(--s-2); font-size: var(--t-small); }
+.period { display: grid; grid-template-columns: 56px 1fr auto 1fr; gap: var(--s-2); align-items: center; }
+.small { font-size: 0.82rem; }
+.ctl-toggles { gap: var(--s-2); }
+.ctl-toggles .btn { justify-content: space-between; width: 100%; font-size: var(--t-small); min-height: 40px; }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.btn[aria-pressed="true"]::after { content: "on"; font-family: var(--f-mono); font-size: 0.7rem; margin-left: auto; }
+
+/* --------------------------------------------------------------- stage */
+.atlas-stage { display: grid; gap: var(--s-3); min-width: 0; }
+.atlas-maptitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-4); margin: 0; }
+.atlas-maptitle .display { font-size: var(--t-m); line-height: 1.1; font-weight: 700; }
+.atlas-period { color: var(--accent); border-bottom: 2px solid var(--accent); }
+.atlas-mapwrap { position: relative; height: min(68vh, 640px); min-height: 420px; border: var(--hair); background: rgba(251, 251, 248, 0.35); }
+.atlas-map, .atlas-sketch, .atlas-tablewrap { position: absolute; inset: 0; }
+.atlas-map[hidden], .atlas-sketch[hidden], .atlas-tablewrap[hidden] { display: none; }
+.atlas-map .maplibregl-canvas { outline: none; }
+.atlas-map .maplibregl-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.atlas-map .maplibregl-ctrl-group { border-radius: 0; box-shadow: none; border: var(--hair); background: var(--paper-raised); }
+.atlas-map .maplibregl-ctrl-group button { width: 32px; height: 32px; }
+.atlas-sketch { display: flex; align-items: center; justify-content: center; padding: var(--s-4); background: var(--paper-raised); }
+.atlas-sketch-svg { width: 100%; height: 100%; }
+.atlas-sketch .sk-d { cursor: pointer; }
+.atlas-sketch .sk-d:hover .sk-line { stroke-width: 1.8; }
+.atlas-sketch .sk-d.is-compare .sk-line { stroke-dasharray: 5 3; stroke-width: 1.6; }
+.atlas-tablewrap { overflow: auto; border: 0; }
+.atlas-tip { position: absolute; top: 0; left: 0; z-index: 4; pointer-events: none; background: var(--paper-raised); border: var(--hair); padding: 4px 8px; white-space: nowrap; transform-origin: 0 0; }
+.atlas-legend { position: absolute; right: var(--s-3); bottom: var(--s-3); z-index: 3; max-width: 290px; transform: none; }
+.atlas-mapwrap:has(.atlas-tablewrap:not([hidden])) .atlas-legend { display: none; }
+.atlas-table { font-size: 0.875rem; }
+.atlas-maplabel { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; background: var(--paper-raised); border: 1px solid var(--ink); padding: 2px 5px; white-space: nowrap; pointer-events: none; }
+.atlas-maplabel.is-sel { border-color: var(--accent); color: var(--accent); border-width: 1.5px; }
+.atlas-caveat { max-width: 70ch; }
+
+/* table view */
+.atlas-table td, .atlas-table th { padding: 6px 10px; }
+.atlas-table tr.is-sel td { background: var(--accent-wash); }
+.atlas-table .bar-cell { width: 30%; min-width: 90px; }
+.atlas-table .bar { display: block; height: 10px; border: 0.75px solid var(--ink); min-width: 1px; }
+.linkish { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.linkish:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --------------------------------------------------------------- panel */
+.atlas-panel { display: grid; gap: var(--s-4); align-content: start; }
+.atlas-search { display: grid; gap: var(--s-2); }
+.dp { display: grid; gap: var(--s-3); border: var(--hair); background: var(--paper-raised); padding: var(--s-4); }
+.panel-empty { display: grid; gap: var(--s-3); }
+.panel-empty .t-lead { font-size: 1.1rem; }
+.dp-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3); }
+.dp-name { font-size: var(--t-l); line-height: 0.95; }
+.dp-clear { background: none; border: var(--hair-soft); padding: 4px 8px; cursor: pointer; }
+.dp .panel { max-width: none; background: var(--paper); }
+.dp-trend { margin: 0; display: grid; gap: var(--s-2); }
+.dp-trend svg { width: 100%; height: auto; overflow: visible; }
+.dp-key { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-4); font-size: 0.75rem; color: #6B1F1D; }
+.dp-key li { display: flex; align-items: center; gap: var(--s-2); color: var(--ink); }
+.chip-x { border: var(--hair-soft); background: var(--paper); cursor: pointer; line-height: 1; padding: 1px 5px; }
+.dp-compare { display: grid; gap: var(--s-2); }
+.dp .btn { width: 100%; justify-content: space-between; font-size: var(--t-small); }
+.cat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(3px, 1fr)); height: 26px; border: var(--hair); }
+.cat-strip span.is-year { outline: 2px solid var(--accent); outline-offset: -1px; position: relative; z-index: 1; }
+.cat-axis { display: flex; justify-content: space-between; }
+
+/* --------------------------------------------------------- year ruler */
+.atlas-rulerbar { display: grid; grid-template-columns: auto 1fr; gap: var(--s-4); align-items: center; margin-top: var(--s-5); border-top: var(--hair); padding-top: var(--s-3); }
+.atlas-play { min-width: 92px; justify-content: center; }
+.ruler { position: relative; height: 64px; cursor: ew-resize; touch-action: none; user-select: none; }
+.ruler svg { width: 100%; height: 100%; overflow: visible; }
+.rl-base { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.rl-tick { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.rl-label { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-soft); }
+.rl-spark { fill: none; stroke: var(--ink-soft); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.ruler-thumb { position: absolute; top: 0; bottom: 14px; width: 0; border-left: 2px solid var(--accent); }
+.ruler-thumb.is-end span { left: auto; right: 6px; }
+.ruler-thumb span { position: absolute; top: -4px; left: 6px; font-family: var(--f-mono); font-size: 0.8rem; font-weight: 500; color: var(--accent-ink); background: var(--accent); padding: 1px 6px; }
+.ruler-thumb:focus-visible { outline: none; }
+.ruler-thumb:focus-visible span { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ruler.is-playing .ruler-thumb { transition: left 800ms linear; }
+@media (prefers-reduced-motion: reduce) { .ruler.is-playing .ruler-thumb { transition: none; } }
+.ruler.is-disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ------------------------------------------------------------- mobile */
+@media (max-width: 899px) {
+  .atlas { display: flex; flex-direction: column; padding-top: var(--s-3); }
+  .atlas-body { display: contents; }
+  .atlas-head { order: 0; grid-template-columns: 1fr; gap: var(--s-3); margin-bottom: var(--s-3); }
+  .atlas-title { font-size: 26vw; }
+  .atlas-intro .t-lead { font-size: 1rem; }
+  .atlas-error { order: 1; }
+  .atlas-stage { order: 2; }
+  .atlas-mapwrap { height: 55vh; min-height: 320px; }
+  .atlas-legend { max-width: 62%; padding: 6px 8px; }
+  .atlas-legend .mono { font-size: 0.66rem; }
+  .atlas-caveat, .atlas-stage .source { font-size: 0.8rem; }
+  .atlas-rulerbar { order: 3; position: sticky; top: 0; z-index: 6; background: var(--paper); margin-top: 0; padding-bottom: var(--s-2); }
+  .atlas-play { min-width: 0; padding-inline: 10px; }
+  .atlas-tabs { order: 4; display: grid; grid-template-columns: repeat(3, 1fr); border: var(--hair); margin-top: var(--s-4); position: sticky; top: 88px; z-index: 5; background: var(--paper-raised); }
+  .atlas-tabs button { font-family: var(--f-mono); font-size: var(--t-label); letter-spacing: var(--track-label); text-transform: uppercase; padding: 12px 4px; border: 0; background: none; cursor: pointer; color: var(--ink); }
+  .atlas-tabs button + button { border-left: var(--hair); }
+  .atlas-tabs button[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+  .atlas-pane { order: 5; display: none; border: var(--hair); border-top: 0; padding: var(--s-4); background: var(--paper-raised); }
+  .atlas[data-tab="measure"] [data-pane="measure"],
+  .atlas[data-tab="district"] [data-pane="district"],
+  .atlas[data-tab="table"] [data-pane="table"] { display: grid; }
+  .atlas-pane { min-width: 0; max-width: 100%; grid-template-columns: minmax(0, 1fr); }
+  .atlas-pane-table { padding: 0; }
+  .atlas-pane-table .table-wrap { border: 0; }
+  .ruler-thumb span { font-size: 0.72rem; }
+}
+
+
+/* ===== Inlined from maplibre-gl/dist/maplibre-gl.css (package stylesheet) ===== */
+</style>

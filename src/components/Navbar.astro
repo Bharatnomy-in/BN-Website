@@ -1,0 +1,210 @@
+---
+// code, coordsText and coordsLabel are still accepted so existing pages that pass
+// them keep working, but the strip no longer displays them.
+interface Props {
+  code?: string;
+  coordsText?: string;
+  coordsLabel?: string;
+}
+
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+const u = (p: string) => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE + (p.startsWith('/') ? p : `/${p}`));
+const pathname = Astro.url.pathname.replace(/\/$/, '') || '/';
+
+const navItems = [
+  { href: u('/research'), label: 'Research' },
+  { href: u('/datasets'), label: 'Datasets' },
+  { href: u('/atlas'), label: 'Atlas' },
+  { href: u('/dashboard'), label: 'Dashboard' },
+  { href: u('/about'), label: 'About' },
+];
+
+const contentsItems = [
+  { href: u('/'), label: 'Home', code: 'BN-000' },
+  { href: u('/research'), label: 'Research', code: 'BN-RES' },
+  { href: u('/datasets'), label: 'Datasets', code: 'BN-DATA' },
+  { href: u('/atlas'), label: 'Atlas', code: 'BN-ATLAS' },
+  { href: u('/dashboard'), label: 'Dashboard', code: 'BN-DASH' },
+  { href: u('/about'), label: 'About', code: 'BN-ABT' },
+  { href: u('/careers'), label: 'Careers', code: 'BN-JOB' },
+];
+
+const homePath = u('/').replace(/\/$/, '') || '/';
+const isCurrent = (href: string) => {
+  const target = href.replace(/\/$/, '') || '/';
+  return target === homePath ? pathname === target : pathname === target || pathname.startsWith(`${target}/`);
+};
+---
+<header class="strip">
+  <div class="lens-band" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+  <div class="strip-row">
+    <a href={u('/')} class="strip-mark" aria-label="Bharatnomy, home">BHARATNOMY</a>
+    <nav class="strip-nav" aria-label="Main">
+      <ul>
+        {navItems.map((item) => (
+          <li>
+            <a href={item.href} class="label" aria-current={isCurrent(item.href) ? 'page' : undefined}>
+              {item.label}
+              {isCurrent(item.href) && (
+                <svg class="strip-underline" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M1,3.6 C18,2.2 36,4.6 55,3.1 S88,2.4 99,3.8" />
+                </svg>
+              )}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+    <div class="strip-actions">
+      <button class="theme-toggle label" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon" aria-hidden="true">◐</span><span data-theme-label>Dark</span>
+      </button>
+      <button class="strip-contents label" popovertarget="contents" type="button">Contents</button>
+    </div>
+  </div>
+  <nav id="contents" class="contents" popover aria-label="Contents">
+    <div class="contents-head">
+      <p class="label">BHARATNOMY · CONTENTS</p>
+      <button class="label contents-close" popovertarget="contents" popovertargetaction="hide" type="button">Close</button>
+    </div>
+    <ol class="contents-list">
+      {contentsItems.map((item) => (
+        <li>
+          <a href={item.href} aria-current={isCurrent(item.href) ? 'page' : undefined}>
+            <span class="contents-title display">{item.label}</span>
+            <span class="contents-dots" aria-hidden="true"></span>
+            <span class="label">{item.code}</span>
+          </a>
+        </li>
+      ))}
+    </ol>
+  </nav>
+</header>
+<style is:global>
+/* ------------------------------------------------------- Shared 24-hour theme */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #111418;
+  --paper-raised: #1A2026;
+  --paper-back: #171D23;
+  --grid-minor: rgba(235, 239, 243, 0.025);
+  --grid-major: rgba(235, 239, 243, 0.07);
+  --ink: #F0F2F3;
+  --ink-soft: #B7C0C9;
+  --ink-faint: rgba(240, 242, 243, 0.34);
+  --accent: #9DB2FF;
+  --accent-wash: rgba(157, 178, 255, 0.16);
+  --accent-ink: #111418;
+  --rule-blue: rgba(157, 178, 255, 0.18);
+  --tint-clm: #34231F; --tint-eng: #342D1B; --tint-mac: #1F3025;
+  --tint-eqt: #202B3C; --tint-com: #322432;
+  --lens-clm-ink: #F0F2F3; --lens-eng-ink: #111418; --lens-mac-ink: #F0F2F3;
+  --lens-eqt-ink: #F0F2F3; --lens-com-ink: #F0F2F3;
+}
+html[data-theme="dark"] body { background-color: var(--paper); color: var(--ink); }
+html[data-theme="dark"] .ground-ink { --paper-local: var(--ink); background-color: #090C0F; }
+html[data-theme="dark"] .strip { background: var(--paper); }
+html[data-theme="dark"] .contents { background-color: var(--paper); color: var(--ink); }
+html[data-theme="dark"] .back { --ink: #F2F3EF; --ink-soft: #D5DCE6; --ink-faint: rgba(242, 243, 239, 0.4); }
+.strip-actions { display: flex; align-items: stretch; margin-left: auto; }
+.theme-toggle { display: inline-flex; align-items: center; gap: 7px; border: 0; border-left: var(--hair-soft); background: transparent; color: var(--ink); padding: 0 14px; cursor: pointer; }
+.theme-toggle:hover { color: var(--accent); }
+.theme-toggle-icon { font-size: 1rem; line-height: 1; }
+/* ------------------------------------------------------- InstrumentStrip */
+.strip { border-bottom: var(--hair); background: var(--paper); position: sticky; top: 0; z-index: 100; }
+.lens-band { display: grid; grid-template-columns: repeat(5, 1fr); height: 5px; }
+.lens-band span:nth-child(1) { background: var(--lens-clm); } .lens-band span:nth-child(2) { background: var(--lens-eng); }
+.lens-band span:nth-child(3) { background: var(--lens-mac); } .lens-band span:nth-child(4) { background: var(--lens-eqt); }
+.lens-band span:nth-child(5) { background: var(--lens-com); }
+.strip-row {
+  max-width: var(--page-max); margin-inline: auto; padding-inline: var(--gutter);
+  display: flex; align-items: stretch; min-height: 44px;
+}
+.strip-row > * { display: flex; align-items: center; padding: 0 var(--s-4); border-left: var(--hair-soft); }
+.strip-row > :first-child { border-left: 0; padding-left: 0; }
+.strip-mark { font-family: var(--f-display); font-weight: 800; font-size: 1.2rem; letter-spacing: 0.04em; color: var(--ink); text-decoration: none; }
+.strip-nav ul { display: flex; gap: 0; list-style: none; margin: 0; padding: 0; }
+.strip-nav li + li::before { content: "|"; color: var(--ink-faint); padding: 0 var(--s-2); font-family: var(--f-mono); font-size: var(--t-label); }
+.strip-nav a { position: relative; color: var(--ink); text-decoration: none; padding: 12px 2px; }
+.strip-nav a:hover { color: var(--accent); }
+.strip-underline { position: absolute; left: 0; right: 0; bottom: 6px; width: 100%; height: 6px; overflow: visible; }
+.strip-underline path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.strip-contents { display: none; margin-left: auto; background: none; border: 0; border-left: var(--hair-soft); cursor: pointer; }
+.contents {
+  inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0;
+  border: 0; padding: var(--s-5) var(--gutter);
+  background: var(--paper);
+  background-image:
+    linear-gradient(var(--grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-major) 1px, transparent 1px);
+  background-size: var(--grid) var(--grid);
+  color: var(--ink);
+}
+.contents-head { display: flex; justify-content: space-between; align-items: center; border-bottom: var(--hair); padding-bottom: var(--s-3); margin-bottom: var(--s-6); }
+.contents-close { background: none; border: var(--hair); padding: 8px 12px; cursor: pointer; }
+.contents-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-4); }
+.contents-list a { display: flex; align-items: baseline; gap: var(--s-3); color: var(--ink); text-decoration: none; }
+.contents-list a[aria-current="page"] .contents-title { color: var(--accent); }
+.contents-title { font-size: 2.6rem; line-height: 1; }
+.contents-dots { flex: 1; border-bottom: 2px dotted var(--ink-faint); transform: translateY(-6px); }
+@media (max-width: 899px) {
+  .strip-nav { display: none !important; }
+  .strip-contents { display: flex; }
+}
+</style>
+<script is:inline>
+// Always start a refreshed page at the top instead of restoring its previous scroll position.
+(() => {
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  const isReload = () => {
+    try { return performance.getEntriesByType('navigation')[0]?.type === 'reload'; }
+    catch { return false; }
+  };
+  const resetReloadScroll = () => {
+    if (!isReload()) return;
+    window.scrollTo(0, 0);
+    requestAnimationFrame(() => window.scrollTo(0, 0));
+    setTimeout(() => window.scrollTo(0, 0), 0);
+  };
+  window.addEventListener('pageshow', resetReloadScroll);
+  resetReloadScroll();
+})();
+
+(() => {
+  const KEY = 'bharatnomy-theme-v1';
+  const DAY = 24 * 60 * 60 * 1000;
+  const readTheme = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (!saved || !saved.expiresAt || Date.now() >= saved.expiresAt) {
+        localStorage.removeItem(KEY);
+        return 'light';
+      }
+      return saved.theme === 'dark' ? 'dark' : 'light';
+    } catch { return 'light'; }
+  };
+  const applyTheme = (theme, persist = false) => {
+    document.documentElement.dataset.theme = theme;
+    document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(theme === 'dark'));
+      button.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+      const label = button.querySelector('[data-theme-label]');
+      if (label) label.textContent = theme === 'dark' ? 'Light' : 'Dark';
+      const icon = button.querySelector('.theme-toggle-icon');
+      if (icon) icon.textContent = theme === 'dark' ? '☀' : '◐';
+    });
+    if (persist) {
+      try { localStorage.setItem(KEY, JSON.stringify({ theme, expiresAt: Date.now() + DAY })); } catch {}
+    }
+  };
+  applyTheme(readTheme());
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-theme-toggle]');
+    if (!button) return;
+    applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  });
+  window.addEventListener('storage', (event) => {
+    if (event.key === KEY) applyTheme(readTheme());
+  });
+})();
+</script>
