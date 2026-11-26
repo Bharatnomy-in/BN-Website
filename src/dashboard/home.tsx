@@ -24,7 +24,8 @@ export default function Home() {
         </div>
       </div>
 
-      <style>{`
+      {/* raw CSS: plain <style> text is escaped differently on the server and in the browser, which breaks hydration */}
+      <style dangerouslySetInnerHTML={{ __html: `
         .dashboard-home { max-width: 1440px; margin: 0 auto; padding: clamp(44px, 7vw, 92px) clamp(18px, 4vw, 56px) 30px; color: var(--ink, #16181c); }
         .dashboard-intro { max-width: 780px; }
         .dashboard-kicker { margin: 0 0 18px; font: 500 11px/1.4 'Geist Mono', monospace; letter-spacing: .12em; color: var(--ink-soft, #526052); }
@@ -38,7 +39,7 @@ export default function Home() {
         .dashboard-empty p { margin: 0; color: var(--ink-soft, #4c535c); font: 400 15px/1.7 'Geist', sans-serif; }
         .dashboard-empty code { padding: 2px 5px; background: var(--dashboard-code-bg, rgba(22,24,28,.07)); font: 400 .9em 'Geist Mono', monospace; }
         @media (max-width: 640px) { .dashboard-empty { min-height: 260px; } .dashboard-empty-top { font-size: 9px; } }
-      `}</style>
+      ` }} />
     </section>
   );
 }
