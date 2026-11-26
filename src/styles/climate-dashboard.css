@@ -1,0 +1,3 @@
+/* Dashboard-only Tailwind utilities.
+   Deliberately omit @tailwind base to protect the site's existing Astro styles and Navbar. */
+@tailwind utilities;

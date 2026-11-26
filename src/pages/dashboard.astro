@@ -2,6 +2,8 @@
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
 import Home from '../dashboard/home';
+import '../styles/climate-dashboard.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import fs from 'node:fs';
 import path from 'node:path';
 import '@fontsource/big-shoulders-display/700';
@@ -33,7 +35,7 @@ const pageDescription = 'Bharatnomy interactive dashboard workspace.';
   <body class="dashboard-page" data-base={BASE}>
     <a class="dashboard-skip" href="#main">Skip to content</a>
     <Navbar code="BN-DASH" />
-    <main id="main">
+    <main id="main" class="climate-atlas">
       <Home client:load />
     </main>
     <Footer stats={pageStats} />
