@@ -1073,6 +1073,9 @@ function drawLeaders(root = document) {
         svg.setAttribute('aria-hidden', 'true');
         document.body.appendChild(svg);
     }
+    // measure the page without this layer: sized to its own height, it kept growing the page
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
     const W = document.documentElement.scrollWidth, H = document.documentElement.scrollHeight;
     svg.setAttribute('width', String(W));
     svg.setAttribute('height', String(H));

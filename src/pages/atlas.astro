@@ -324,6 +324,8 @@ const pageDescription = "District-level climate records for Maharashtra: pick a 
 
         <fieldset class="ctl">
           <legend class="label">Measure</legend>
+          <details class="metric-pick" data-metric-pick>
+          <summary class="metric-current"><span data-metric-current></span><span class="metric-count label soft" data-metric-count></span></summary>
           <ul class="metric-list">
             {METRICS.map((m) => (
               <li data-metric-item data-dataset={m.dataset} hidden={m.dataset !== 'temperature'}>
@@ -334,8 +336,19 @@ const pageDescription = "District-level climate records for Maharashtra: pick a 
               </li>
             ))}
           </ul>
+          </details>
         </fieldset>
         <aside class="mnote ctl-help" data-help aria-live="polite"></aside>
+
+        <div class="ctl ctl-compare">
+          <label class="label" for="cmp-ds">Compare side by side</label>
+          <select id="cmp-ds" data-cmp-ds>
+            <option value="">One map</option>
+            {DATASETS.map((d) => <option value={d.slug}>{d.tab}</option>)}
+          </select>
+          <select id="cmp-metric" data-cmp-metric aria-label="Measure on the second map" hidden></select>
+          <p class="soft small" data-cmp-note hidden>The second map follows the year on the ruler, or its nearest year with data.</p>
+        </div>
 
         <fieldset class="ctl" data-view-set>
           <legend class="label">View</legend>
@@ -360,50 +373,68 @@ const pageDescription = "District-level climate records for Maharashtra: pick a 
           <p class="soft small" data-classes-note hidden>Diverging measures are always symmetric around zero.</p>
         </fieldset>
 
-        <div class="ctl ctl-toggles">
-          <button type="button" class="btn" data-toggle="sketch" aria-pressed="false"><span>Sketch view</span></button>
-          <button type="button" class="btn" data-toggle="table" aria-pressed="false"><span>Show as table</span></button>
-          <button type="button" class="btn" data-png><span>Save map as PNG</span><span class="btn-arrow" aria-hidden="true">↓</span></button>
-        </div>
       </aside>
 
       <!-- ===================================================== the map -->
       <section class="atlas-stage" aria-label="Map">
-        <p class="atlas-maptitle"><span class="display" data-map-title></span> <span class="label atlas-period" data-map-period></span></p>
-        <div class="atlas-mapwrap">
-          <div class="atlas-map" data-map tabindex="-1"></div>
-          <div class="atlas-sketch" data-sketch hidden></div>
-          <div class="atlas-tablewrap table-wrap" data-table hidden></div>
-          <div class="atlas-tip label" data-tip hidden></div>
-          <figure class="legend atlas-legend" data-legend></figure>
+        <div class="atlas-maps">
+          <div class="atlas-mapcol">
+            <p class="atlas-maptitle"><span class="display" data-map-title></span> <span class="label atlas-period" data-map-period></span></p>
+            <div class="atlas-mapwrap">
+              <div class="atlas-map" data-map tabindex="-1"></div>
+              <div class="atlas-sketch" data-sketch hidden></div>
+              <div class="atlas-tablewrap table-wrap" data-table hidden></div>
+              <div class="atlas-tip label" data-tip hidden></div>
+              <figure class="legend atlas-legend" data-legend></figure>
+            </div>
+          </div>
+          <!-- second map, shown when comparing side by side -->
+          <div class="atlas-mapcol atlas-mapcol--b" data-cmp-col hidden>
+            <p class="atlas-maptitle"><span class="display" data-map-title-b></span> <span class="label atlas-period" data-map-period-b></span></p>
+            <div class="atlas-mapwrap">
+              <div class="atlas-map" data-map-b tabindex="-1" aria-label="Second map, for comparison"></div>
+              <div class="atlas-tip label" data-tip-b hidden></div>
+              <figure class="legend atlas-legend" data-legend-b></figure>
+            </div>
+          </div>
         </div>
-        <aside class="mnote atlas-caveat"><span class="label mnote-label">Read with care</span><span data-caveat></span></aside>
+        <aside class="mnote atlas-caveat"><span class="label mnote-label">Read with care</span><span data-caveat></span><span data-caveat-b hidden></span></aside>
         <p class="source label" data-source></p>
+        <p class="source label" data-source-b hidden></p>
         <p class="visually-hidden" aria-live="polite" data-sr></p>
       </section>
 
       <!-- ======================================= district panel (margin) -->
-      <aside class="atlas-panel atlas-pane" data-pane="district" aria-label="District">
-        <div class="atlas-search">
+      <div class="atlas-search atlas-pane" data-pane="district">
           <label class="label" for="district-search">Find a district</label>
           <input id="district-search" type="search" list="district-list" autocomplete="off" placeholder="Type a name, then Enter" />
           <datalist id="district-list">{ds.map((d) => <option value={d.name} />)}</datalist>
-        </div>
-        <div class="dp card-flat" data-panel>
-          <div class="panel-empty"><p class="t-lead">Select a district on the map, or search for one.</p></div>
-        </div>
-      </aside>
+      </div>
 
-      <div class="atlas-pane atlas-pane-table" data-pane="table"><div class="table-wrap" data-table-m></div></div>
-    </div>
-
-    <!-- ======================================================= year ruler -->
+      <!-- =================== year ruler and map tools (right column, below the search) -->
+      <div class="atlas-tools">
     <div class="atlas-rulerbar">
       <button type="button" class="btn atlas-play" data-play aria-pressed="false"><span>Play</span></button>
       <div class="ruler" data-ruler>
         <svg viewBox="0 0 1000 64" preserveAspectRatio="none" aria-hidden="true"></svg>
         <div class="ruler-thumb" role="slider" tabindex="0" aria-label="Year" aria-valuemin="1951" aria-valuemax="2024" aria-valuenow="2024"><span>2024</span></div>
       </div>
+    </div>
+        <div class="ctl ctl-toggles" aria-label="Map tools" role="group">
+          <button type="button" class="btn" data-split aria-pressed="false"><span>Split map: compare two</span></button>
+          <button type="button" class="btn" data-toggle="sketch" aria-pressed="false"><span>Sketch view</span></button>
+          <button type="button" class="btn" data-toggle="table" aria-pressed="false"><span>Show as table</span></button>
+          <button type="button" class="btn" data-png><span>Save map as PNG</span><span class="btn-arrow" aria-hidden="true">↓</span></button>
+        </div>
+      </div>
+
+      <aside class="atlas-panel atlas-pane" data-pane="district" aria-label="District">
+        <div class="dp card-flat" data-panel>
+          <div class="panel-empty"><p class="t-lead">Select a district on the map, or search for one.</p></div>
+        </div>
+      </aside>
+
+      <div class="atlas-pane atlas-pane-table" data-pane="table"><div class="table-wrap" data-table-m></div></div>
     </div>
 
     <nav class="atlas-tabs" aria-label="Atlas sections" role="tablist">
@@ -437,7 +468,7 @@ function defaults(ds = 'temperature', lastYear = 2024) {
     return {
         dataset: ds, metric: d.defaultMetric, view: 'year', year: lastYear,
         a: d.periods ? [...d.periods.a] : [lastYear, lastYear], b: d.periods ? [...d.periods.b] : [lastYear, lastYear],
-        district: null, compare: [], classes: 'quantile', sketch: false, table: false,
+        district: null, compare: [], classes: 'quantile', sketch: false, table: false, cmp: null,
     };
 }
 const period = (s) => {
@@ -470,6 +501,10 @@ function fromURL(lastYearOf, districts) {
         s.classes = 'equal';
     s.sketch = q.get('sketch') === '1';
     s.table = q.get('table') === '1';
+    // second map: cmp=<dataset>.<metric>
+    const [cd, cm] = (q.get('cmp') ?? '').split('.');
+    if (datasets.some((d) => d.slug === cd))
+        s.cmp = { dataset: cd, metric: metricsOf(cd).some((x) => x.id === cm) ? cm : dsOf(cd).defaultMetric };
     return s;
 }
 function toURL(s) {
@@ -493,6 +528,8 @@ function toURL(s) {
         q.set('sketch', '1');
     if (s.table)
         q.set('table', '1');
+    if (s.cmp)
+        q.set('cmp', `${s.cmp.dataset}.${s.cmp.metric}`);
     history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 
@@ -551,6 +588,14 @@ function scaleFor(f, m, s, shown) {
     // usually one scale for the whole record, so a colour means the same in every
     // year; snapshots far apart (classPerYear) are classed on the year shown
     const all = m.breaks === 'categorical' ? [] : (dsOf(m.dataset)?.classPerYear ? Object.values(shown) : Object.values(f.values).flat()).filter((v) => typeof v === 'number');
+    // diverging scales: size the classes on the 98th percentile of |value|, so one
+    // extreme reading (IMD's Pune 2005, about +330%) cannot flatten every other
+    // district into "near zero"; extremes still fall in the end classes ("above ...")
+    if (m.breaks === 'diverging-symmetric' && all.length > 20) {
+        const abs = all.map(Math.abs).sort((x, y) => x - y);
+        const q = abs[Math.floor((abs.length - 1) * 0.98)];
+        return { ...classify({ kind: m.scale, breaks: m.breaks, values: [-q, q], method: s.classes, decimals: m.decimals, unit: m.unit }), unit: m.unit };
+    }
     return { ...classify({ kind: m.scale, breaks: m.breaks, values: all, method: s.classes, decimals: m.decimals, unit: m.unit, fixed: m.fixed, categories: m.categories }), unit: m.unit };
 }
 
@@ -634,6 +679,10 @@ function createMap(el, districts, state, opts) {
             });
             const refit = () => {
                 map.resize();
+                // a narrower box (e.g. side by side) needs a lower zoom to show the whole state
+                const cam = map.cameraForBounds([w, s, e, n], { padding: 24 });
+                if (cam && cam.zoom - 1 < map.getMinZoom())
+                    map.setMinZoom(Math.max(0, cam.zoom - 1));
                 if (!touched)
                     map.fitBounds([w, s, e, n], { padding: 24, animate: false });
             };
@@ -701,13 +750,18 @@ function createMap(el, districts, state, opts) {
 function createRuler(root, onChange) {
     const svg = root.querySelector('svg');
     const thumb = root.querySelector('[role="slider"]');
-    let years = [1951, 2024], year = 2024, disabled = false;
-    const W = 1000, H = 64, L = 8, R = 8;
+    let years = [1951, 2024], year = 2024, disabled = false, last = null;
+    // drawn at the ruler's real width, so labels are never stretched or squashed
+    let W = 1000;
+    const H = 64, L = 8, R = 8;
+    const measure = () => { W = Math.max(160, Math.round(svg.getBoundingClientRect().width) || 1000); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); };
     const x = (y) => L + ((y - years[0]) / (years[years.length - 1] - years[0] || 1)) * (W - L - R);
     const draw = (series) => {
+        last = series;
+        measure();
         const parts = [`<line x1="${L}" x2="${W - R}" y1="${H - 18}" y2="${H - 18}" class="rl-base"/>`];
         for (const y of years) {
-            const few = years.length <= 12, big = few || y % 10 === 0, mid = y % 5 === 0;
+            const few = years.length <= 12, big = few || y % 10 === 0 && (W >= 420 || y % 20 === 0), mid = y % 5 === 0;
             parts.push(`<line x1="${x(y)}" x2="${x(y)}" y1="${H - 18}" y2="${H - 18 - (big ? 12 : mid ? 8 : 4)}" class="rl-tick"/>`);
             if (big)
                 parts.push(`<text x="${x(y)}" y="${H - 4}" text-anchor="middle" class="rl-label">${y}</text>`);
@@ -779,6 +833,8 @@ function createRuler(root, onChange) {
             commit(map[e.key], false);
         }
     });
+    if ('ResizeObserver' in window)
+        new ResizeObserver(() => { draw(last); place(); }).observe(root);
     return {
         set(y, series, ys, dis = false, lab) {
             if (lab)
@@ -981,6 +1037,8 @@ async function renderPanel(el, ctx) {
             catch { /* skip a related metric that failed to load */ }
         }
     }
+    if (ctx.cmpRow)
+        rows.push(ctx.cmpRow);
     const period = periodLabel(f, s);
     // trend: selected + compared districts, whole record
     let chart = '';
@@ -1079,11 +1137,54 @@ async function boot() {
     let shown = {};
     let colors = {};
     let scale;
+    // second map (side-by-side compare): created the first time it is needed
+    let atlasB = null, atlasBReady = null, sB = null, shownB = null, scaleB = null, cmpRow = null;
+    let syncing = false;
+    const link = (from, to) => from.map.on('move', () => {
+        if (syncing || !to)
+            return;
+        syncing = true;
+        to.map.jumpTo({ center: from.map.getCenter(), zoom: from.map.getZoom() });
+        syncing = false;
+    });
+    function ensureB() {
+        if (!atlasBReady)
+            atlasBReady = createMap($('[data-map-b]'), geo, stateGeo, {
+                onHover: (lgd, x, y) => hoverTip($('[data-tip-b]'), lgd, x, y),
+                onClick: (lgd) => select(lgd),
+            }).then((B) => {
+                atlasB = B;
+                link(atlas, atlasB);
+                link(atlasB, atlas);
+                atlasB.map.jumpTo({ center: atlas.map.getCenter(), zoom: atlas.map.getZoom() });
+                return B;
+            });
+        return atlasBReady;
+    }
+    /** Hover card: both maps' values when comparing. */
+    function hoverTip(tipEl, lgd, x, y) {
+        if (!lgd) {
+            tipEl.hidden = true;
+            return;
+        }
+        const m = metricById(s.metric);
+        let text = `${names[lgd].toUpperCase()} · ${m.short.toUpperCase()} ${fmtVal(shown[lgd] ?? null, m, s, scale?.unit ?? m.unit).toUpperCase()}`;
+        if (s.cmp && shownB) {
+            const mB = metricById(s.cmp.metric);
+            text += ` · ${mB.short.toUpperCase()} ${fmtVal(shownB[lgd] ?? null, mB, sB, scaleB?.unit ?? mB.unit).toUpperCase()}`;
+        }
+        tipEl.textContent = text;
+        tipEl.hidden = false;
+        tipEl.style.transform = `translate(${Math.round(x + 14)}px, ${Math.round(y - 30)}px)`;
+    }
     /* ---------------------------------------------------------- controls ---- */
     function syncControls() {
         $$('[data-ds]').forEach((b) => { const on = b.dataset.ds === s.dataset; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
         $$('[data-metric-item]').forEach((li) => { li.hidden = li.dataset.dataset !== s.dataset; });
         $$('input[name="metric"]').forEach((i) => { i.checked = i.value === s.metric; });
+        $('[data-metric-current]').textContent = metricById(s.metric).label;
+        const nm = metricsOf(s.dataset).length;
+        $('[data-metric-count]').textContent = nm > 1 ? `${nm} measures` : '';
         const cat = metricById(s.metric).breaks === 'categorical';
         const views = viewsOf(s.dataset);
         $$('input[name="view"]').forEach((i) => { i.checked = i.value === s.view; i.disabled = cat && i.value !== 'year'; i.closest('label').hidden = !views.includes(i.value); });
@@ -1100,6 +1201,21 @@ async function boot() {
         const div = metricById(s.metric).breaks !== 'quantile';
         $$('input[name="classes"]').forEach((i) => { i.checked = i.value === s.classes; i.disabled = div || s.view === 'change'; });
         $('[data-classes-note]').hidden = !(div || s.view === 'change');
+        // second map
+        const split = !!s.cmp;
+        $('[data-cmp-ds]').value = s.cmp?.dataset ?? '';
+        const cm = $('[data-cmp-metric]');
+        cm.hidden = !split;
+        $('[data-cmp-note]').hidden = !split;
+        if (split) {
+            cm.innerHTML = metricsOf(s.cmp.dataset).map((x) => `<option value="${x.id}">${esc(x.label)}</option>`).join('');
+            cm.value = s.cmp.metric;
+        }
+        $('[data-split]').setAttribute('aria-pressed', String(split));
+        $('[data-split] span').textContent = split ? 'Back to one map' : 'Split map: compare two';
+        $$('[data-toggle]').forEach((b) => { b.disabled = split; });   // sketch and table show one map
+        root.classList.toggle('is-split', split);
+        $('[data-cmp-col]').hidden = !split;
         $('[data-toggle="sketch"]').setAttribute('aria-pressed', String(s.sketch));
         $('[data-toggle="table"]').setAttribute('aria-pressed', String(s.table));
         const m = metricById(s.metric);
@@ -1152,8 +1268,48 @@ async function boot() {
             renderTable($('[data-table-m]'), rows, m, s, scale.unit, colors, bl, select);
         if (!s.table && !showSketch)
             requestAnimationFrame(() => atlas.resize());
+        // second map: its own record, the same year (or its nearest), same view if it has one
+        cmpRow = null;
+        if (s.cmp) {
+            const mB = metricById(s.cmp.metric);
+            const fB = await loadMetric(s.cmp.dataset, s.cmp.metric);
+            if (ticket !== pending)
+                return;
+            const dB = dsOf(s.cmp.dataset);
+            const nearestB = fB.years.reduce((b, v) => (Math.abs(v - s.year) < Math.abs(b - s.year) ? v : b), fB.years[fB.years.length - 1]);
+            const viewB = viewsOf(s.cmp.dataset).includes(s.view) ? s.view : 'year';
+            sB = { ...s, dataset: s.cmp.dataset, metric: s.cmp.metric, view: viewB, year: nearestB,
+                a: viewB === 'change' && s.cmp.dataset !== s.dataset ? [...(dB.periods?.a ?? s.a)] : s.a,
+                b: viewB === 'change' && s.cmp.dataset !== s.dataset ? [...(dB.periods?.b ?? s.b)] : s.b };
+            shownB = viewValues(fB, sB);
+            scaleB = scaleFor(fB, mB, sB, shownB);
+            const colorsB = Object.fromEntries(Object.entries(shownB).map(([k, v]) => [k, v == null ? null : scaleB.color(v)]));
+            const B = await ensureB();
+            if (ticket !== pending)
+                return;
+            B.setColors(colorsB, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
+            B.setSelection(s.district, s.compare, names, centroids);
+            const periodB = viewB === 'decade' ? `${decadeLabel(sB.year, fB)} average` : periodLabel(fB, sB);
+            $('[data-map-title-b]').textContent = viewB === 'change' ? `Change in ${mB.label.replace(/ \(.*\)$/, '').toLowerCase()}` : mB.label;
+            $('[data-map-period-b]').textContent = periodB;
+            renderLegend($('[data-legend-b]'), `${viewB === 'change' ? 'Change' : mB.short}${scaleB.unit && scaleB.unit !== 'SPI' ? ' · ' + scaleB.unit.toUpperCase() : ''}`, scaleB, Object.values(colorsB).some((c) => c == null), dB.nodataLabel);
+            const srcB = `${dB.source}, ${recordLabel(fB, s.cmp.dataset)}${dB.computed ? ` · ${dB.computed}` : ''}`;
+            $('[data-source-b]').innerHTML = `SECOND MAP: ${srcB.toUpperCase()} · ${mB.label.toUpperCase()} · ${periodB.toUpperCase()} · <a href="${u(`/datasets/${s.cmp.dataset}`)}">DATASET</a>`;
+            const cb = $('[data-caveat-b]');
+            cb.hidden = s.cmp.dataset === s.dataset || !dB.caveat;
+            cb.textContent = ` Second map: ${dB.caveat ?? ''}`;
+            if (s.district)
+                cmpRow = { label: `${mB.short} · ${periodB}`, value: fmtVal(shownB[s.district] ?? null, mB, sB, scaleB.unit), note: 'SECOND MAP' };
+            requestAnimationFrame(() => { atlas.resize(); B.resize(); });
+        }
+        else {
+            shownB = null;
+            $('[data-caveat-b]').hidden = true;
+        }
+        $('[data-source-b]').hidden = !s.cmp;
         if (opts.panel !== false)
             await renderPanel($('[data-panel]'), {
+                cmpRow,
                 s, m, f, unit: scale.unit, shown, districts, byLgd, source,
                 onCompare: (add, remove) => {
                     if (add && !s.compare.includes(add) && s.compare.length < 3)
@@ -1187,7 +1343,7 @@ async function boot() {
         b.addEventListener('click', () => {
             if (b.dataset.ds === s.dataset)
                 return;
-            const keep = { district: s.district, compare: s.compare, view: s.view, year: s.year, sketch: s.sketch, table: s.table, classes: s.classes };
+            const keep = { district: s.district, compare: s.compare, view: s.view, year: s.year, sketch: s.sketch, table: s.table, classes: s.classes, cmp: s.cmp };
             s = { ...defaults(b.dataset.ds, lastYear(b.dataset.ds)), ...keep };
             s.year = Math.min(s.year, lastYear(s.dataset));
             if (!viewsOf(s.dataset).includes(s.view))
@@ -1206,8 +1362,11 @@ async function boot() {
     });
     root.addEventListener('change', (e) => {
         const t = e.target;
+        if (t.matches('[data-cmp-ds], [data-cmp-metric]'))
+            return;
         if (t.name === 'metric') {
             s.metric = t.value;
+            $('[data-metric-pick]').open = false;   // roll the list back up
             if (metricById(s.metric).breaks === 'categorical')
                 s.view = 'year';
             commit({ animate: true });
@@ -1231,6 +1390,16 @@ async function boot() {
             commit({ animate: true });
         }
     });
+    // side-by-side compare: pick a dataset (and measure) for the second map
+    const otherDataset = () => (s.dataset === 'rainfall' ? 'temperature' : 'rainfall');
+    const setCmp = (ds, metric) => {
+        s.cmp = ds ? { dataset: ds, metric: metric ?? dsOf(ds).defaultMetric } : null;
+        if (s.cmp) { s.sketch = false; s.table = false; }
+        commit({ animate: true });
+    };
+    $('[data-cmp-ds]').addEventListener('change', (e) => setCmp(e.target.value || null));
+    $('[data-cmp-metric]').addEventListener('change', (e) => setCmp(s.cmp.dataset, e.target.value));
+    $('[data-split]').addEventListener('click', () => setCmp(s.cmp ? null : otherDataset()));
     $$('[data-toggle]').forEach((b) => b.addEventListener('click', () => {
         const k = b.dataset.toggle;
         s[k] = !s[k];
@@ -1307,16 +1476,7 @@ async function boot() {
         update({ panel: !scrubbing });
     });
     atlas = await createMap($('[data-map]'), geo, stateGeo, {
-        onHover: (lgd, x, y) => {
-            if (!lgd) {
-                tip.hidden = true;
-                return;
-            }
-            const m = metricById(s.metric);
-            tip.textContent = `${names[lgd].toUpperCase()} · ${fmtVal(shown[lgd] ?? null, m, s, scale?.unit ?? m.unit).toUpperCase()}`;
-            tip.hidden = false;
-            tip.style.transform = `translate(${Math.round(x + 14)}px, ${Math.round(y - 30)}px)`;
-        },
+        onHover: (lgd, x, y) => hoverTip(tip, lgd, x, y),
         onClick: (lgd) => select(lgd),
     });
     root.classList.add('is-ready');
@@ -1354,6 +1514,9 @@ function drawLeaders(root = document) {
         svg.setAttribute('aria-hidden', 'true');
         document.body.appendChild(svg);
     }
+    // measure the page without this layer: sized to its own height, it kept growing the page
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
     const W = document.documentElement.scrollWidth, H = document.documentElement.scrollHeight;
     svg.setAttribute('width', String(W));
     svg.setAttribute('height', String(H));
@@ -1944,7 +2107,29 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .atlas-error { margin-bottom: var(--s-4); }
 .atlas-error .btn { width: 100%; justify-content: space-between; text-align: left; padding: var(--s-4); }
 
-.atlas-body { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: var(--s-6); align-items: start; }
+.atlas-body {
+  display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: var(--s-4) var(--s-6); align-items: start;
+  grid-template-areas: "controls stage search" "controls stage tools" "controls stage panel"; grid-template-rows: auto auto 1fr;
+}
+.atlas-controls { grid-area: controls; }
+.atlas-stage { grid-area: stage; }
+.atlas-body > .atlas-search { grid-area: search; }
+.atlas-tools { grid-area: tools; display: grid; gap: var(--s-3); border: var(--hair); background: var(--paper-raised); padding: var(--s-3); }
+.atlas-panel { grid-area: panel; }
+.atlas-tools .atlas-rulerbar { margin-top: 0; padding-top: var(--s-2); border-top: 0; gap: var(--s-2); grid-template-columns: 1fr; }
+.atlas-tools .atlas-rulerbar .ruler { order: 1; }
+.atlas-tools .atlas-play { order: 2; justify-self: start; }
+.atlas-tools .ctl-toggles { border-top: var(--hair-soft); padding-top: var(--s-3); }
+/* measures: one line showing the chosen measure; rolls down to list the rest */
+.metric-pick { border: var(--hair); background: var(--paper-raised); }
+.metric-current { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--s-2); align-items: center; padding: 9px 30px 9px 10px; cursor: pointer; list-style: none; position: relative; font-size: var(--t-small); font-weight: 600; line-height: 1.35; }
+.metric-current::-webkit-details-marker { display: none; }
+.metric-current::after { content: ""; position: absolute; right: 12px; top: 50%; width: 7px; height: 7px; border-right: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink); transform: translateY(-70%) rotate(45deg); transition: transform 160ms ease; }
+.metric-pick[open] .metric-current::after { transform: translateY(-30%) rotate(-135deg); }
+.metric-current:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.metric-count { grid-column: 1; font-weight: 400; font-size: 0.6rem; }
+.metric-count:empty { display: none; }
+.metric-pick .metric-list { border-top: var(--hair); padding: 0 8px 4px; }
 .atlas-pane-table, .atlas-tabs { display: none; }
 
 /* ------------------------------------------------------------ controls */
@@ -1988,6 +2173,23 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .atlas-maptitle .display { font-size: var(--t-m); line-height: 1.1; font-weight: 700; }
 .atlas-period { color: var(--accent); border-bottom: 2px solid var(--accent); }
 .atlas-mapwrap { position: relative; height: min(68vh, 640px); min-height: 420px; border: var(--hair); background: rgba(251, 251, 248, 0.35); }
+/* one map, or two side by side */
+.atlas-maps { display: grid; gap: var(--s-4); }
+.atlas-mapcol { display: grid; gap: var(--s-3); min-width: 0; align-content: start; }
+.atlas-mapcol[hidden] { display: none; }
+.atlas.is-split .atlas-maps { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.atlas.is-split .atlas-maptitle { min-height: 2.6em; align-content: start; }
+.atlas.is-split .atlas-maptitle .display { font-size: 1.05rem; }
+.atlas.is-split .atlas-mapwrap { height: auto; min-height: 0; display: flex; flex-direction: column; }
+.atlas.is-split .atlas-map { position: relative; inset: auto; aspect-ratio: 1 / 0.92; }
+/* legend sits under each map, so it never covers the state */
+.atlas.is-split .atlas-legend { position: static; max-width: none; margin: 0; border: 0; border-top: var(--hair); padding: 8px 10px; background: var(--paper-raised); }
+.atlas.is-split .atlas-legend .legend-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px var(--s-3); }
+.atlas.is-split .atlas-legend .mono { font-size: 0.62rem; }
+.atlas.is-split .atlas-legend .legend-title { font-size: 0.6rem; }
+.atlas-mapcol--b .atlas-period { color: var(--lens-eqt); border-color: var(--lens-eqt); }
+.ctl-compare select[hidden], .ctl-compare [hidden] { display: none; }
+[data-toggle]:disabled { opacity: 0.45; cursor: not-allowed; }
 .atlas-map, .atlas-sketch, .atlas-tablewrap { position: absolute; inset: 0; }
 .atlas-map[hidden], .atlas-sketch[hidden], .atlas-tablewrap[hidden] { display: none; }
 .atlas-map .maplibregl-canvas { outline: none; }
@@ -2065,10 +2267,16 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
   .atlas-error { order: 1; }
   .atlas-stage { order: 2; }
   .atlas-mapwrap { height: 55vh; min-height: 320px; }
+  .atlas.is-split .atlas-maps { grid-template-columns: 1fr; }
+  .atlas.is-split .atlas-map { aspect-ratio: 1 / 0.8; }
   .atlas-legend { max-width: 62%; padding: 6px 8px; }
   .atlas-legend .mono { font-size: 0.66rem; }
   .atlas-caveat, .atlas-stage .source { font-size: 0.8rem; }
+  .atlas-tools { display: contents; }
+  .atlas-tools .atlas-rulerbar { grid-template-columns: auto 1fr; }
+  .atlas-tools .atlas-rulerbar .ruler, .atlas-tools .atlas-play { order: 0; }
   .atlas-rulerbar { order: 3; position: sticky; top: 0; z-index: 6; background: var(--paper); margin-top: 0; padding-bottom: var(--s-2); }
+  .atlas-tools .ctl-toggles { order: 6; border-top: 0; margin-top: var(--s-4); }
   .atlas-play { min-width: 0; padding-inline: 10px; }
   .atlas-tabs { order: 4; display: grid; grid-template-columns: repeat(3, 1fr); border: var(--hair); margin-top: var(--s-4); position: sticky; top: 88px; z-index: 5; background: var(--paper-raised); }
   .atlas-tabs button { font-family: var(--f-mono); font-size: var(--t-label); letter-spacing: var(--track-label); text-transform: uppercase; padding: 12px 4px; border: 0; background: none; cursor: pointer; color: var(--ink); }
