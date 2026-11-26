@@ -278,6 +278,42 @@ export const METRICS = [
     higherIs: 'highest share', lowerIs: 'lowest share',
     help: 'Share of villages at the highest ODF Plus grade, Model: every household and institution has sanitation and the village manages its solid and liquid waste and keeps it visibly clean.',
   },
+  // ------------------------------------------------------------ power plants
+  {
+    id: 'capacity_mw_total', dataset: 'power-plants',
+    label: 'Power plant capacity, all fuels (MW)', short: 'Capacity',
+    unit: 'MW', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'most capacity', lowerIs: 'least capacity',
+    help: "Generating capacity of every plant in the district listed in WRI's Global Power Plant Database (2021 release), coal to solar. Each dot on the map is one plant, sized by its capacity and coloured by its fuel.",
+  },
+  {
+    id: 'plant_count', dataset: 'power-plants',
+    label: 'Number of power plants', short: 'Plants',
+    unit: 'plants', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'most plants', lowerIs: 'fewest plants',
+    help: 'How many plants of any size and fuel the database lists in the district. Many small solar, wind and sugar-mill plants can outnumber one large coal station.',
+  },
+  {
+    id: 'capacity_mw_fossil', dataset: 'power-plants',
+    label: 'Coal, gas and oil capacity (MW)', short: 'Fossil capacity',
+    unit: 'MW', scale: 'warm', breaks: 'quantile', decimals: 0,
+    higherIs: 'most fossil capacity', lowerIs: 'least fossil capacity',
+    help: 'Capacity of plants whose main fuel is coal, gas or oil.',
+  },
+  {
+    id: 'capacity_mw_renewable', dataset: 'power-plants',
+    label: 'Solar, wind, hydro and biomass capacity (MW)', short: 'Renewable capacity',
+    unit: 'MW', scale: 'forest', breaks: 'quantile', decimals: 0,
+    higherIs: 'most renewable capacity', lowerIs: 'least renewable capacity',
+    help: 'Capacity of plants whose main fuel is solar, wind, hydro or biomass (mostly sugar-mill bagasse). Nuclear (Tarapur) is in neither group.',
+  },
+  {
+    id: 'renewable_share_pct', dataset: 'power-plants',
+    label: 'Renewable share of capacity (%)', short: 'Renewable share',
+    unit: '%', scale: 'forest', breaks: 'quantile', decimals: 1,
+    higherIs: 'highest renewable share', lowerIs: 'lowest renewable share',
+    help: "Solar, wind, hydro and biomass capacity as a share of all the district's listed capacity.",
+  },
 ];
 
 export const SMALL_DISTRICT_NOTE = SMALL;

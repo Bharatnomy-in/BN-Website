@@ -134,13 +134,46 @@ function foldPalghar(ds, rows, metrics) {
   return rows.filter((r) => r.district !== 'Palghar');
 }
 
+// -------------------------------------------------- one row per point -> district
+// Tables with one row per plant (or other point) become one row per district:
+// sums and counts over the district's rows (optionally only some fuels), and
+// ratios of two of those as a percentage.
+function aggregate(ds, rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (!r.lgd_district_code) continue;   // a point outside every district
+    if (!groups.has(r.lgd_district_code)) groups.set(r.lgd_district_code, []);
+    groups.get(r.lgd_district_code).push(r);
+  }
+  const ids = Object.keys(ds.aggregate);
+  const out = [...groups.values()].map((g) => {
+    const row = { state_ut: g[0].state_ut, lgd_state_code: g[0].lgd_state_code, district: g[0].district, lgd_district_code: g[0].lgd_district_code };
+    for (const [id, a] of Object.entries(ds.aggregate)) {
+      if (a.ratio) continue;
+      const sel = a.fuels ? g.filter((r) => a.fuels.includes(r.primary_fuel)) : g;
+      if (a.sum && sel.some((r) => r[a.sum] === '' || Number.isNaN(+r[a.sum]))) fail(`${ds.slug}: blank or non-numeric ${a.sum} in ${row.district}`);
+      row[id] = String(a.count ? sel.length : round(sel.reduce((s, r) => s + +r[a.sum], 0), 2));
+    }
+    for (const [id, a] of Object.entries(ds.aggregate)) {
+      if (!a.ratio) continue;
+      const [num, den] = a.ratio;
+      row[id] = +row[den] ? String(round((+row[num] / +row[den]) * 100, 2)) : '';
+    }
+    return row;
+  });
+  out.columns = ['state_ut', 'lgd_state_code', 'district', 'lgd_district_code', ...ids];
+  log(`${ds.slug}: ${rows.length} rows summed into ${out.length} districts`);
+  return out;
+}
+
 // ------------------------------------------------------------------ 3. data
 function loadDataset(repoDir, ds) {
   const dir = path.join(repoDir, ds.path);
   const csvFile = path.join(dir, `${ds.folder}.csv`);
   if (!fs.existsSync(csvFile)) fail(`${ds.slug}: CSV not found at ${ds.path}`);
   const text = fs.readFileSync(csvFile, 'utf8');
-  const rows = csvParse(text);
+  let rows = csvParse(text);
+  if (ds.aggregate) rows = aggregate(ds, rows);
   const cols = rows.columns;
   const metrics = METRICS.filter((m) => m.dataset === ds.slug);
   const absent = metrics.filter((m) => !cols.includes(m.id)).map((m) => m.id);

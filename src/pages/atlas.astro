@@ -322,7 +322,7 @@ const pageDescription = "District-level climate records for Maharashtra: pick a 
           </div>
         </div>
 
-        <fieldset class="ctl">
+        <fieldset class="ctl" data-measure-set>
           <legend class="label">Measure</legend>
           <details class="metric-pick" data-metric-pick>
           <summary class="metric-current"><span data-metric-current></span><span class="metric-count label soft" data-metric-count></span></summary>
@@ -364,7 +364,7 @@ const pageDescription = "District-level climate records for Maharashtra: pick a 
           </div>
         </fieldset>
 
-        <fieldset class="ctl">
+        <fieldset class="ctl" data-classes-set>
           <legend class="label">Classes</legend>
           <div class="seg">
             <label><input type="radio" name="classes" value="quantile" /> <span>Quantile (5)</span></label>
@@ -600,6 +600,38 @@ function scaleFor(f, m, s, shown) {
 }
 
 
+/* ------------------------------------------------- power plants (dots) ---- */
+// WRI Global Power Plant Database (2021), drawn over any district map.
+const PLANTS_DS = 'power-plants', PLANTS_FILE = 'ENG_power-plants_2021_MH_WRI_DIST';
+const FUELS = [
+    ['Coal', '#3A3F46'], ['Gas', '#9AA0A8'], ['Oil', '#8A5626'], ['Nuclear', '#7B3FA0'],
+    ['Hydro', '#1F5FA8'], ['Solar', '#F0B429'], ['Wind', '#7FC0B8'], ['Biomass', '#4A7556'],
+];
+let plantsP = null;
+function loadPlants() {
+    plantsP ??= fetch(u(`/data/${PLANTS_DS}/${PLANTS_FILE}.json`)).then((r) => {
+        if (!r.ok)
+            throw new Error(PLANTS_FILE);
+        return r.json();
+    }).then((rows) => ({
+        type: 'FeatureCollection',
+        features: rows.filter((r) => r.latitude != null && r.longitude != null).map((r, i) => ({
+            type: 'Feature', id: i,
+            geometry: { type: 'Point', coordinates: [r.longitude, r.latitude] },
+            properties: { name: r.plant, fuel: r.primary_fuel, mw: r.capacity_mw, year: r.commissioning_year, owner: r.owner, district: r.district, lgd: r.lgd_district_code },
+        })),
+    }));
+    return plantsP;
+}
+/** A points dataset (power plants) is drawn as dots only: districts stay unshaded. */
+const clear = (colors) => Object.fromEntries(Object.keys(colors).map((k) => [k, 'rgba(0,0,0,0)']));
+const plantText = (p) => [p.name, p.fuel, `${Number(p.mw).toLocaleString('en-IN', { maximumFractionDigits: 1 })} MW`, p.year ? `since ${Math.round(p.year)}` : null, p.district].filter(Boolean).join(' · ').toUpperCase();
+/** Fuel key and size note, added under the map legend while the dots are on. */
+function plantKey(fc) {
+    const n = (fuel) => fc.features.filter((f) => f.properties.fuel === fuel).length;
+    return `<div class="legend-plants"><p class="label legend-title">Power plants by main fuel · ${fc.features.length}</p><ul class="legend-list legend-list--plants">${FUELS.filter(([k]) => n(k)).map(([k, c]) => `<li><span class="legend-dot" style="background:${c}"></span><span class="mono">${k} ${n(k)}</span></li>`).join('')}</ul><p class="mono soft legend-size">Dot size = capacity (MW)</p></div>`;
+}
+
 maplibregl.setWorkerUrl(u('/maplibre/maplibre-gl-worker.mjs'));
 const INK = '#16181C', ACCENT = '#2346C7';
 function bbox(fc) {
@@ -669,6 +701,13 @@ function createMap(el, districts, state, opts) {
         map.on('load', () => {
             map.addImage('nodata', hatchImage());
             map.addLayer({ id: 'nodata', type: 'fill', source: 'districts', paint: { 'fill-pattern': 'nodata', 'fill-opacity': ['case', ['boolean', ['feature-state', 'nodata'], false], 1, 0] } }, 'line');
+            map.addSource('plants', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+            map.addLayer({ id: 'plants', type: 'circle', source: 'plants', layout: { visibility: 'none', 'circle-sort-key': ['-', 0, ['get', 'mw']] }, paint: {
+                    'circle-color': ['match', ['get', 'fuel'], ...FUELS.flat(), '#FFFFFF'],
+                    // area grows with capacity: 1 MW about 2.5 px, 3,300 MW about 15 px
+                    'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, ['+', 2, ['*', 0.2, ['sqrt', ['get', 'mw']]]], 9, ['+', 3.5, ['*', 0.3, ['sqrt', ['get', 'mw']]]]],
+                    'circle-stroke-color': INK, 'circle-stroke-width': 0.8, 'circle-opacity': 0.9,
+                } });
             map.setMinZoom(Math.max(0, map.getZoom() - 1));
             // keep the whole state in view when the box changes size, until the reader moves the map
             let touched = false;
@@ -690,6 +729,13 @@ function createMap(el, districts, state, opts) {
                 new ResizeObserver(() => requestAnimationFrame(refit)).observe(el);
             let hovered = null;
             map.on('mousemove', 'fill', (ev) => {
+                // a power plant dot under the pointer wins over its district
+                const plant = map.getLayoutProperty('plants', 'visibility') === 'visible' ? map.queryRenderedFeatures(ev.point, { layers: ['plants'] })[0] : null;
+                if (plant) {
+                    map.getCanvas().style.cursor = 'pointer';
+                    opts.onPlant?.(plant.properties, ev.point.x, ev.point.y);
+                    return;
+                }
                 const id = ev.features?.[0]?.id;
                 if (id == null)
                     return;
@@ -738,6 +784,11 @@ function createMap(el, districts, state, opts) {
                         d.textContent = names[id];
                         return new maplibregl.Marker({ element: d, anchor: 'bottom', offset: [0, -6] }).setLngLat(centroids[id]).addTo(map);
                     });
+                },
+                setPlants(fc, on) {
+                    if (fc)
+                        map.getSource('plants').setData(fc);
+                    map.setLayoutProperty('plants', 'visibility', on ? 'visible' : 'none');
                 },
                 resize() { map.resize(); },
             };
@@ -1081,6 +1132,7 @@ async function renderPanel(el, ctx) {
       <ul class="dp-key mono">${key}</ul>
       <figcaption class="source label">SOURCE: ${esc(ctx.source.toUpperCase())}${m.breaks !== 'categorical' && baselineOf(m.dataset) ? ` · SHADED BAND = ${baselineOf(m.dataset).join('–')} NORMAL` : ''}${m.breaks !== 'categorical' && !s.compare.length && f.years.length >= 15 ? ' · BLUE = 10-YEAR ROLLING MEAN' : ''}</figcaption>
     </figure>
+    ${ctx.extra ?? ''}
     <div class="dp-compare">
       <label class="label" for="dp-add">Compare with (up to 3)</label>
       <select id="dp-add" ${s.compare.length >= 3 ? 'disabled' : ''}><option value="">Add a district…</option>${options}</select>
@@ -1151,6 +1203,7 @@ async function boot() {
         if (!atlasBReady)
             atlasBReady = createMap($('[data-map-b]'), geo, stateGeo, {
                 onHover: (lgd, x, y) => hoverTip($('[data-tip-b]'), lgd, x, y),
+                onPlant: (p, x, y) => plantTip($('[data-tip-b]'), p, x, y),
                 onClick: (lgd) => select(lgd),
             }).then((B) => {
                 atlasB = B;
@@ -1176,6 +1229,43 @@ async function boot() {
         tipEl.textContent = text;
         tipEl.hidden = false;
         tipEl.style.transform = `translate(${Math.round(x + 14)}px, ${Math.round(y - 30)}px)`;
+    }
+    function plantTip(tipEl, p, x, y) {
+        tipEl.textContent = plantText(p);
+        tipEl.hidden = false;
+        // plant names are long: flip the card to the left of the pointer near the right edge
+        const room = tipEl.parentElement.clientWidth - (x + 14);
+        const left = room < tipEl.offsetWidth ? Math.max(0, x - 14 - tipEl.offsetWidth) : x + 14;
+        tipEl.style.transform = `translate(${Math.round(left)}px, ${Math.round(y - 30)}px)`;
+    }
+    /** Plant dots on whichever map shows a points dataset, with the fuel key under its legend. */
+    let plants = null;
+    async function showPlants(ticket) {
+        const onA = !!dsOf(s.dataset)?.points, onB = !!(s.cmp && dsOf(s.cmp.dataset)?.points);
+        if ((onA || onB) && !plants) {
+            try { plants = await loadPlants(); }
+            catch (err) { console.error(err); return; }
+            if (ticket !== pending)
+                return;
+        }
+        for (const [A, on, sel] of [[atlas, onA, '[data-legend]'], [s.cmp ? atlasB : null, onB, '[data-legend-b]']]) {
+            if (!A)
+                continue;
+            A.setPlants(plants, on);
+            if (on)
+                $(sel).insertAdjacentHTML('beforeend', plantKey(plants));
+        }
+    }
+    /** The plants in one district, largest first, for its panel. */
+    function plantList(lgd) {
+        if (!plants || !dsOf(s.dataset)?.points)
+            return '';
+        const name = byLgd[lgd]?.name;
+        const here = plants.features.map((f) => f.properties).filter((p) => p.lgd === lgd).sort((a, b) => b.mw - a.mw);
+        if (!here.length)
+            return `<p class="soft dp-plants-none">No plants listed in ${esc(name)}.</p>`;
+        const color = Object.fromEntries(FUELS);
+        return `<section class="dp-plants" aria-label="Plants in ${esc(name)}"><p class="label">Plants · ${here.length}</p><ol class="dp-plant-list">${here.map((p) => `<li><span class="legend-dot" style="background:${color[p.fuel] ?? '#fff'}"></span><span class="dp-plant-name">${esc(p.name)}</span><span class="mono soft">${esc(p.fuel)} · ${Number(p.mw).toLocaleString('en-IN', { maximumFractionDigits: 1 })} MW</span></li>`).join('')}</ol></section>`;
     }
     /* ---------------------------------------------------------- controls ---- */
     function syncControls() {
@@ -1219,7 +1309,11 @@ async function boot() {
         $('[data-toggle="sketch"]').setAttribute('aria-pressed', String(s.sketch));
         $('[data-toggle="table"]').setAttribute('aria-pressed', String(s.table));
         const m = metricById(s.metric);
-        $('[data-help]').innerHTML = `<span class="label mnote-label">${m.short}</span>${m.help}${m.caveat ? ` <em>${m.caveat}</em>` : ''}`;
+        const dots = !!dsOf(s.dataset)?.points;
+        $('[data-measure-set]').hidden = dots;
+        $('[data-classes-set]').hidden = dots;
+        $('[data-help]').innerHTML = dots ? `<span class="label mnote-label">${esc(dsOf(s.dataset).tab)}</span>${dsOf(s.dataset).help}`
+            : `<span class="label mnote-label">${m.short}</span>${m.help}${m.caveat ? ` <em>${m.caveat}</em>` : ''}`;
     }
     /* ------------------------------------------------------------ update ---- */
     let atlas;
@@ -1237,17 +1331,21 @@ async function boot() {
         shown = viewValues(f, s);
         scale = scaleFor(f, m, s, shown);
         colors = Object.fromEntries(Object.entries(shown).map(([k, v]) => [k, v == null ? null : scale.color(v)]));
-        atlas.setColors(colors, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
+        const dotsA = !!dsm.points;
+        atlas.setColors(dotsA ? clear(colors) : colors, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
         atlas.setSelection(s.district, s.compare, names, centroids);
         const period = periodLabel(f, s);
-        $('[data-map-title]').textContent = s.view === 'change' ? `Change in ${m.label.replace(/ \(.*\)$/, '').toLowerCase()}` : m.label;
+        $('[data-map-title]').textContent = dotsA ? dsm.mapTitle : s.view === 'change' ? `Change in ${m.label.replace(/ \(.*\)$/, '').toLowerCase()}` : m.label;
         $('[data-map-period]').textContent = s.view === 'decade' ? `${decadeLabel(s.year, f)} average` : period;
         const legendTitle = `${s.view === 'change' ? 'Change' : m.short}${scale.unit && scale.unit !== 'SPI' ? ' · ' + scale.unit.toUpperCase() : ''}`;
-        renderLegend($('[data-legend]'), legendTitle, scale, Object.values(colors).some((c) => c == null), dsm.nodataLabel);
+        if (dotsA)
+            $('[data-legend]').innerHTML = '';   // the fuel key is added by showPlants
+        else
+            renderLegend($('[data-legend]'), legendTitle, scale, Object.values(colors).some((c) => c == null), dsm.nodataLabel);
         const ds = dsm;
         const source = `${ds.source}, ${recordLabel(f, s.dataset)}${ds.computed ? ` · ${ds.computed}` : ''}`;
         $('[data-caveat]').textContent = ds.caveat ?? '';
-        $('[data-source]').innerHTML = `SOURCE: ${source.toUpperCase()} · ${m.label.toUpperCase()} · ${period.toUpperCase()} · <a href="${u(`/datasets/${s.dataset}`)}">DATASET</a>`;
+        $('[data-source]').innerHTML = `SOURCE: ${source.toUpperCase()} · ${(dotsA ? dsm.mapTitle : m.label).toUpperCase()} · ${period.toUpperCase()} · <a href="${u(`/datasets/${s.dataset}`)}">DATASET</a>`;
         ruler.set(s.year, f.state_mean, f.years, s.view === 'change', (y) => yearText(s.dataset, y));
         // views
         const showSketch = s.sketch && !s.table;
@@ -1287,14 +1385,17 @@ async function boot() {
             const B = await ensureB();
             if (ticket !== pending)
                 return;
-            B.setColors(colorsB, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
+            const dotsB = !!dB.points;
+            B.setColors(dotsB ? clear(colorsB) : colorsB, reduce ? 0 : opts.fade ?? (opts.animate ? 350 : 0));
             B.setSelection(s.district, s.compare, names, centroids);
             const periodB = viewB === 'decade' ? `${decadeLabel(sB.year, fB)} average` : periodLabel(fB, sB);
-            $('[data-map-title-b]').textContent = viewB === 'change' ? `Change in ${mB.label.replace(/ \(.*\)$/, '').toLowerCase()}` : mB.label;
+            $('[data-map-title-b]').textContent = dotsB ? dB.mapTitle : viewB === 'change' ? `Change in ${mB.label.replace(/ \(.*\)$/, '').toLowerCase()}` : mB.label;
             $('[data-map-period-b]').textContent = periodB;
-            renderLegend($('[data-legend-b]'), `${viewB === 'change' ? 'Change' : mB.short}${scaleB.unit && scaleB.unit !== 'SPI' ? ' · ' + scaleB.unit.toUpperCase() : ''}`, scaleB, Object.values(colorsB).some((c) => c == null), dB.nodataLabel);
+            if (dotsB)
+                $('[data-legend-b]').innerHTML = '';
+            else renderLegend($('[data-legend-b]'), `${viewB === 'change' ? 'Change' : mB.short}${scaleB.unit && scaleB.unit !== 'SPI' ? ' · ' + scaleB.unit.toUpperCase() : ''}`, scaleB, Object.values(colorsB).some((c) => c == null), dB.nodataLabel);
             const srcB = `${dB.source}, ${recordLabel(fB, s.cmp.dataset)}${dB.computed ? ` · ${dB.computed}` : ''}`;
-            $('[data-source-b]').innerHTML = `SECOND MAP: ${srcB.toUpperCase()} · ${mB.label.toUpperCase()} · ${periodB.toUpperCase()} · <a href="${u(`/datasets/${s.cmp.dataset}`)}">DATASET</a>`;
+            $('[data-source-b]').innerHTML = `SECOND MAP: ${srcB.toUpperCase()} · ${(dotsB ? dB.mapTitle : mB.label).toUpperCase()} · ${periodB.toUpperCase()} · <a href="${u(`/datasets/${s.cmp.dataset}`)}">DATASET</a>`;
             const cb = $('[data-caveat-b]');
             cb.hidden = s.cmp.dataset === s.dataset || !dB.caveat;
             cb.textContent = ` Second map: ${dB.caveat ?? ''}`;
@@ -1307,9 +1408,12 @@ async function boot() {
             $('[data-caveat-b]').hidden = true;
         }
         $('[data-source-b]').hidden = !s.cmp;
+        await showPlants(ticket);
+        if (ticket !== pending)
+            return;
         if (opts.panel !== false)
             await renderPanel($('[data-panel]'), {
-                cmpRow,
+                cmpRow, extra: s.district ? plantList(s.district) : '',
                 s, m, f, unit: scale.unit, shown, districts, byLgd, source,
                 onCompare: (add, remove) => {
                     if (add && !s.compare.includes(add) && s.compare.length < 3)
@@ -1477,6 +1581,7 @@ async function boot() {
     });
     atlas = await createMap($('[data-map]'), geo, stateGeo, {
         onHover: (lgd, x, y) => hoverTip(tip, lgd, x, y),
+        onPlant: (p, x, y) => plantTip(tip, p, x, y),
         onClick: (lgd) => select(lgd),
     });
     root.classList.add('is-ready');
@@ -2206,6 +2311,16 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .atlas-legend { position: absolute; right: var(--s-3); bottom: var(--s-3); z-index: 3; max-width: 290px; transform: none; }
 .atlas-mapwrap:has(.atlas-tablewrap:not([hidden])) .atlas-legend { display: none; }
 .atlas-table { font-size: 0.875rem; }
+.legend-plants { margin-top: 8px; padding-top: 8px; border-top: var(--hair-soft); }
+.legend-plants:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.legend-list--plants { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; }
+.legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 0.8px solid var(--ink); flex: none; }
+.legend-size { font-size: 0.62rem; margin-top: 4px; }
+.dp-plants { margin: var(--s-3) 0; }
+.dp-plant-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 260px; overflow-y: auto; border-top: var(--hair-soft); }
+.dp-plant-list li { display: grid; grid-template-columns: 10px 1fr; column-gap: 8px; align-items: center; padding: 5px 0; border-bottom: var(--hair-soft); }
+.dp-plant-list .mono { grid-column: 2; font-size: 0.68rem; }
+.dp-plant-name { font-size: var(--t-small); }
 .atlas-maplabel { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; background: var(--paper-raised); border: 1px solid var(--ink); padding: 2px 5px; white-space: nowrap; pointer-events: none; }
 .atlas-maplabel.is-sel { border-color: var(--accent); color: var(--accent); border-width: 1.5px; }
 .atlas-caveat { max-width: 70ch; }

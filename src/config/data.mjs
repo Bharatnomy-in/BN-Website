@@ -48,6 +48,11 @@ export const BOUNDARIES_PATH = `states/${STATE.slug}/districts.geojson`;
 //               as num / den * 100. Every metric must be one or the other.
 //   computed    the "how" part of the source line
 //   downloads   false: the Datasets page build copies the original files
+//   aggregate   tables with one row per point (e.g. per plant): rows are summed
+//               into one row per district first. Each metric is { sum: col,
+//               fuels? }, { count: true, fuels? } or { ratio: [num, den] } (as %)
+//   points      the Atlas draws the rows as dots only, no district shading
+//               (needs latitude/longitude); mapTitle and help replace the measure's
 const IMD_COMPUTED = 'district indices computed by Bharatnomy';
 export const DATASETS = [
   {
@@ -159,6 +164,29 @@ export const DATASETS = [
     fold: {
       sum: ['total_villages', 'odf_plus_villages', 'odf_plus_aspiring_villages', 'odf_plus_rising_villages', 'odf_plus_model_villages'],
       ratio: { odf_plus_villages_pct: ['odf_plus_villages', 'total_villages'], odf_plus_model_villages_pct: ['odf_plus_model_villages', 'total_villages'] },
+    },
+  },
+  {
+    slug: 'power-plants', tab: 'Power plants',
+    caveat: "WRI's Global Power Plant Database is frozen at 2021: plants built since about 2020 (much of today's solar and wind) are missing, and capacities for non-CEA plants can be older than 2019. Not an official Indian government release.",
+    folder: 'ENG_power-plants_2021_MH_WRI_DIST',
+    path: `states/${STATE.slug}/energy-policy/ENG_power-plants_2021_MH_WRI_DIST`,
+    defaultMetric: 'capacity_mw_total',
+    source: 'WRI Global Power Plant Database v1.3.0',
+    sourceUrl: 'https://datasets.wri.org/dataset/globalpowerplantdatabase',
+    time: 'static', staticYear: 2021, periodLabel: '2021 release', baseline: null, views: ['year'],
+    mapTitle: 'Power plants by fuel and capacity',
+    help: "Every plant in Maharashtra listed in WRI's Global Power Plant Database (2021 release), coal to solar. Each dot is one plant: its size is the plant's capacity, its colour the main fuel. Hover a dot for its name, or select a district to list its plants.",
+    computed: 'district totals (side panel and table) summed by Bharatnomy', downloads: false,
+    // one row per plant. The map shows the plants as dots only (no district
+    // shading); the rows are also summed by district for the panel and table.
+    points: true,
+    aggregate: {
+      capacity_mw_total: { sum: 'capacity_mw' },
+      plant_count: { count: true },
+      capacity_mw_fossil: { sum: 'capacity_mw', fuels: ['Coal', 'Gas', 'Oil'] },
+      capacity_mw_renewable: { sum: 'capacity_mw', fuels: ['Solar', 'Wind', 'Hydro', 'Biomass'] },
+      renewable_share_pct: { ratio: ['capacity_mw_renewable', 'capacity_mw_total'] },
     },
   },
 ];

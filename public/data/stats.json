@@ -95,6 +95,7 @@
     {
       "slug": "temperature",
       "tab": "Temperature",
+      "caveat": "Figures are district averages of IMD's gridded data on 2011 boundaries. They are best compared across years and districts, not with a single weather station. Thane includes today's Palghar.",
       "code": "BN-DATA-CLM-001",
       "lens": "Climate adaptation & resilience",
       "folder": "CLM_temperature-indices_1951-to-2024_MH_BNY_DIST",
@@ -147,6 +148,7 @@
     {
       "slug": "rainfall",
       "tab": "Rainfall",
+      "caveat": "Figures are district averages of IMD's gridded data on 2011 boundaries. They are best compared across years and districts, not with a single rain gauge. Thane includes today's Palghar.",
       "code": "BN-DATA-CLM-002",
       "lens": "Climate adaptation & resilience",
       "folder": "CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST",
@@ -199,6 +201,7 @@
     {
       "slug": "active-fires",
       "tab": "Fires",
+      "caveat": "Satellite detections, not fires or area burnt: one large fire can be counted several times, and small fires or fires under cloud are missed. Use the counts to compare places and years. Palghar is counted in Thane (2011 boundaries).",
       "folder": "ENV_active-fires_2001-to-2025_MH_BNY_DIST",
       "path": "states/maharashtra/climate-adaptation/ENV_active-fires_2001-to-2025_MH_BNY_DIST",
       "defaultMetric": "fire_detections",
@@ -240,6 +243,7 @@
     {
       "slug": "forest-cover",
       "tab": "Forest",
+      "caveat": "One assessment, the India State of Forest Report 2023. Thane includes today's Palghar (2011 boundaries): their areas are added and the shares recomputed.",
       "folder": "ENV_forest-cover_2023_MH_FSI_DIST",
       "path": "states/maharashtra/climate-adaptation/ENV_forest-cover_2023_MH_FSI_DIST",
       "defaultMetric": "forest_cover_pct_of_area",
@@ -288,6 +292,7 @@
     {
       "slug": "rainfall-variability",
       "tab": "Rain variability",
+      "caveat": "One value per district for 1971 to 2020, from IMD's daily gridded rainfall. Variability is the year-to-year spread relative to the average, so a dry district and a wet one can score alike.",
       "folder": "CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
       "path": "states/maharashtra/climate-adaptation/CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
       "defaultMetric": "rainfall_jun_sep_cv_pct",
@@ -318,6 +323,7 @@
     {
       "slug": "wind-resource",
       "tab": "Wind",
+      "caveat": "Long-term averages from a model (Global Wind Atlas, 2008 to 2017 climate), not measurements at each site. Good for comparing districts, not for siting a turbine.",
       "folder": "CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
       "path": "states/maharashtra/energy-policy/CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
       "defaultMetric": "power_density_100m_mean_w_m2",
@@ -348,6 +354,7 @@
     {
       "slug": "rural-tap-water",
       "tab": "Tap water",
+      "caveat": "As shown on the Jal Jeevan Mission dashboard on 28 October 2026. Rural households only: Mumbai City and Mumbai Suburban have none. Thane includes today's Palghar (2011 boundaries).",
       "folder": "WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
       "path": "states/maharashtra/climate-adaptation/WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
       "defaultMetric": "households_with_tap_pct",
@@ -391,6 +398,7 @@
     {
       "slug": "odf-plus-villages",
       "tab": "ODF Plus",
+      "caveat": "Two snapshots of the Swachh Bharat Mission (Grameen) dashboard, 1 April 2022 and 24 November 2026. Villages only: the Mumbai districts have none. Thane includes today's Palghar (2011 boundaries).",
       "folder": "WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
       "path": "states/maharashtra/climate-adaptation/WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
       "defaultMetric": "odf_plus_villages_pct",
@@ -403,9 +411,9 @@
       },
       "baseline": null,
       "views": [
-        "year",
-        "change"
+        "year"
       ],
+      "classPerYear": true,
       "periods": {
         "a": [
           2022,
@@ -449,6 +457,73 @@
       "metrics": [
         "odf_plus_villages_pct",
         "odf_plus_model_villages_pct"
+      ]
+    },
+    {
+      "slug": "power-plants",
+      "tab": "Power plants",
+      "caveat": "WRI's Global Power Plant Database is frozen at 2021: plants built since about 2020 (much of today's solar and wind) are missing, and capacities for non-CEA plants can be older than 2019. Not an official Indian government release.",
+      "folder": "ENG_power-plants_2021_MH_WRI_DIST",
+      "path": "states/maharashtra/energy-policy/ENG_power-plants_2021_MH_WRI_DIST",
+      "defaultMetric": "capacity_mw_total",
+      "source": "WRI Global Power Plant Database v1.3.0",
+      "sourceUrl": "https://datasets.wri.org/dataset/globalpowerplantdatabase",
+      "time": "static",
+      "staticYear": 2021,
+      "periodLabel": "2021 release",
+      "baseline": null,
+      "views": [
+        "year"
+      ],
+      "mapTitle": "Power plants by fuel and capacity",
+      "help": "Every plant in Maharashtra listed in WRI's Global Power Plant Database (2021 release), coal to solar. Each dot is one plant: its size is the plant's capacity, its colour the main fuel. Hover a dot for its name, or select a district to list its plants.",
+      "computed": "district totals (side panel and table) summed by Bharatnomy",
+      "downloads": false,
+      "points": true,
+      "aggregate": {
+        "capacity_mw_total": {
+          "sum": "capacity_mw"
+        },
+        "plant_count": {
+          "count": true
+        },
+        "capacity_mw_fossil": {
+          "sum": "capacity_mw",
+          "fuels": [
+            "Coal",
+            "Gas",
+            "Oil"
+          ]
+        },
+        "capacity_mw_renewable": {
+          "sum": "capacity_mw",
+          "fuels": [
+            "Solar",
+            "Wind",
+            "Hydro",
+            "Biomass"
+          ]
+        },
+        "renewable_share_pct": {
+          "ratio": [
+            "capacity_mw_renewable",
+            "capacity_mw_total"
+          ]
+        }
+      },
+      "rows": 29,
+      "districts": 29,
+      "columns": 9,
+      "first_year": 2021,
+      "last_year": 2021,
+      "csv_kb": 35,
+      "json_kb": 111,
+      "metrics": [
+        "capacity_mw_total",
+        "plant_count",
+        "capacity_mw_fossil",
+        "capacity_mw_renewable",
+        "renewable_share_pct"
       ]
     }
   ],
