@@ -21,11 +21,11 @@
     19.44
   ],
   "data": {
-    "repo": "https://github.com/sarveshkant2003-afk/bharatnomy-front",
-    "commit": "7d9978fd6699bf5b7c83328f57bb257d099ce98a",
-    "short": "7d9978f",
-    "date": "2026-11-18",
-    "built": "2026-11-19"
+    "repo": "https://github.com/Bharatnomy-in/BN-FRONT",
+    "commit": "5ced7f6577ce1abaef9bbc6ce8c41c20de32c687",
+    "short": "5ced7f6",
+    "date": "2026-11-24",
+    "built": "2026-11-26"
   },
   "states_mapped": [
     "Maharashtra"
@@ -94,6 +94,7 @@
   "datasets": [
     {
       "slug": "temperature",
+      "tab": "Temperature",
       "code": "BN-DATA-CLM-001",
       "lens": "Climate adaptation & resilience",
       "folder": "CLM_temperature-indices_1951-to-2024_MH_BNY_DIST",
@@ -102,6 +103,28 @@
       "defaultMetric": "days_tmax_above_p90",
       "source": "IMD gridded daily temperature (1° grid)",
       "sourceUrl": "https://imdpune.gov.in/lrfindex.php",
+      "time": "year",
+      "baseline": [
+        1991,
+        2020
+      ],
+      "views": [
+        "year",
+        "decade",
+        "change"
+      ],
+      "periods": {
+        "a": [
+          1961,
+          1990
+        ],
+        "b": [
+          1995,
+          2024
+        ]
+      },
+      "changeScale": "anomaly",
+      "computed": "district indices computed by Bharatnomy",
       "rows": 2590,
       "districts": 35,
       "columns": 22,
@@ -123,6 +146,7 @@
     },
     {
       "slug": "rainfall",
+      "tab": "Rainfall",
       "code": "BN-DATA-CLM-002",
       "lens": "Climate adaptation & resilience",
       "folder": "CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST",
@@ -131,6 +155,28 @@
       "defaultMetric": "rainfall_jun_sep_departure_pct",
       "source": "IMD gridded daily rainfall (0.25° grid)",
       "sourceUrl": "https://imdpune.gov.in/lrfindex.php",
+      "time": "year",
+      "baseline": [
+        1971,
+        2020
+      ],
+      "views": [
+        "year",
+        "decade",
+        "change"
+      ],
+      "periods": {
+        "a": [
+          1961,
+          1990
+        ],
+        "b": [
+          1996,
+          2025
+        ]
+      },
+      "changeScale": "wetdry",
+      "computed": "district indices computed by Bharatnomy",
       "rows": 2625,
       "districts": 35,
       "columns": 27,
@@ -149,6 +195,758 @@
         "spi_jun_sep",
         "monsoon_category"
       ]
+    },
+    {
+      "slug": "active-fires",
+      "tab": "Fires",
+      "folder": "ENV_active-fires_2001-to-2025_MH_BNY_DIST",
+      "path": "states/maharashtra/climate-adaptation/ENV_active-fires_2001-to-2025_MH_BNY_DIST",
+      "defaultMetric": "fire_detections",
+      "source": "NASA FIRMS MODIS active fire detections (1 km)",
+      "sourceUrl": "https://firms.modaps.eosdis.nasa.gov/country/",
+      "time": "year",
+      "baseline": null,
+      "views": [
+        "year",
+        "decade",
+        "change"
+      ],
+      "periods": {
+        "a": [
+          2001,
+          2005
+        ],
+        "b": [
+          2021,
+          2025
+        ]
+      },
+      "changeScale": "anomaly",
+      "computed": "detections counted by district by Bharatnomy",
+      "downloads": false,
+      "rows": 875,
+      "districts": 35,
+      "columns": 14,
+      "first_year": 2001,
+      "last_year": 2025,
+      "csv_kb": 53,
+      "json_kb": 307,
+      "metrics": [
+        "fire_detections",
+        "fire_detections_mar_may",
+        "fire_detections_oct_dec"
+      ]
+    },
+    {
+      "slug": "forest-cover",
+      "tab": "Forest",
+      "folder": "ENV_forest-cover_2023_MH_FSI_DIST",
+      "path": "states/maharashtra/climate-adaptation/ENV_forest-cover_2023_MH_FSI_DIST",
+      "defaultMetric": "forest_cover_pct_of_area",
+      "source": "Forest Survey of India, India State of Forest Report 2023",
+      "sourceUrl": "https://fsi.nic.in/forest-report-2023",
+      "time": "static",
+      "staticYear": 2023,
+      "periodLabel": "2023",
+      "baseline": null,
+      "views": [
+        "year"
+      ],
+      "computed": "Palghar added into Thane (2011 boundaries)",
+      "downloads": false,
+      "fold": {
+        "sum": [
+          "geographical_area_sq_km",
+          "very_dense_forest_sq_km",
+          "moderately_dense_forest_sq_km",
+          "open_forest_sq_km",
+          "forest_cover_total_sq_km",
+          "change_since_2021_sq_km",
+          "scrub_sq_km"
+        ],
+        "ratio": {
+          "forest_cover_pct_of_area": [
+            "forest_cover_total_sq_km",
+            "geographical_area_sq_km"
+          ]
+        }
+      },
+      "rows": 35,
+      "districts": 35,
+      "columns": 13,
+      "first_year": 2023,
+      "last_year": 2023,
+      "csv_kb": 3,
+      "json_kb": 13,
+      "metrics": [
+        "forest_cover_pct_of_area",
+        "forest_cover_total_sq_km",
+        "very_dense_forest_sq_km",
+        "change_since_2021_sq_km"
+      ]
+    },
+    {
+      "slug": "rainfall-variability",
+      "tab": "Rain variability",
+      "folder": "CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
+      "path": "states/maharashtra/climate-adaptation/CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
+      "defaultMetric": "rainfall_jun_sep_cv_pct",
+      "source": "IMD gridded daily rainfall (0.25° grid)",
+      "sourceUrl": "https://imdpune.gov.in/lrfindex.php",
+      "time": "static",
+      "staticYear": 2020,
+      "periodLabel": "1971–2020",
+      "baseline": null,
+      "views": [
+        "year"
+      ],
+      "computed": "district indices computed by Bharatnomy",
+      "downloads": false,
+      "rows": 35,
+      "districts": 35,
+      "columns": 13,
+      "first_year": 2020,
+      "last_year": 2020,
+      "csv_kb": 3,
+      "json_kb": 12,
+      "metrics": [
+        "rainfall_jun_sep_cv_pct",
+        "rainfall_annual_cv_pct",
+        "rainfall_annual_mean_mm"
+      ]
+    },
+    {
+      "slug": "wind-resource",
+      "tab": "Wind",
+      "folder": "CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
+      "path": "states/maharashtra/energy-policy/CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
+      "defaultMetric": "power_density_100m_mean_w_m2",
+      "source": "Global Wind Atlas 3 (DTU, World Bank / ESMAP)",
+      "sourceUrl": "https://globalwindatlas.info/",
+      "time": "static",
+      "staticYear": 2017,
+      "periodLabel": "2008–2017 climate",
+      "baseline": null,
+      "views": [
+        "year"
+      ],
+      "computed": "district averages computed by Bharatnomy",
+      "downloads": false,
+      "rows": 35,
+      "districts": 35,
+      "columns": 11,
+      "first_year": 2017,
+      "last_year": 2017,
+      "csv_kb": 2,
+      "json_kb": 10,
+      "metrics": [
+        "power_density_100m_mean_w_m2",
+        "power_density_100m_p90_w_m2",
+        "wind_speed_100m_mean_ms"
+      ]
+    },
+    {
+      "slug": "rural-tap-water",
+      "tab": "Tap water",
+      "folder": "WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
+      "path": "states/maharashtra/climate-adaptation/WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
+      "defaultMetric": "households_with_tap_pct",
+      "source": "Jal Jeevan Mission dashboard, Ministry of Jal Shakti",
+      "sourceUrl": "https://ejalshakti.gov.in/jjmreport/JJMIndia.aspx",
+      "time": "date",
+      "periodLabel": "October 2026",
+      "baseline": null,
+      "views": [
+        "year"
+      ],
+      "nodataLabel": "no rural households",
+      "computed": "Palghar added into Thane (2011 boundaries)",
+      "downloads": false,
+      "fold": {
+        "sum": [
+          "total_households",
+          "households_with_tap",
+          "households_with_tap_on_2019_08_15",
+          "households_without_tap"
+        ],
+        "ratio": {
+          "households_with_tap_pct": [
+            "households_with_tap",
+            "total_households"
+          ]
+        }
+      },
+      "rows": 33,
+      "districts": 33,
+      "columns": 11,
+      "first_year": 2026,
+      "last_year": 2026,
+      "csv_kb": 3,
+      "json_kb": 10,
+      "metrics": [
+        "households_with_tap_pct",
+        "households_without_tap"
+      ]
+    },
+    {
+      "slug": "odf-plus-villages",
+      "tab": "ODF Plus",
+      "folder": "WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
+      "path": "states/maharashtra/climate-adaptation/WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
+      "defaultMetric": "odf_plus_villages_pct",
+      "source": "Swachh Bharat Mission (Grameen) dashboard, Ministry of Jal Shakti",
+      "sourceUrl": "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx",
+      "time": "date",
+      "yearLabels": {
+        "2022": "April 2022",
+        "2026": "November 2026"
+      },
+      "baseline": null,
+      "views": [
+        "year",
+        "change"
+      ],
+      "periods": {
+        "a": [
+          2022,
+          2022
+        ],
+        "b": [
+          2026,
+          2026
+        ]
+      },
+      "changeScale": "wetdry",
+      "nodataLabel": "no rural villages",
+      "computed": "Palghar added into Thane (2011 boundaries)",
+      "downloads": false,
+      "fold": {
+        "sum": [
+          "total_villages",
+          "odf_plus_villages",
+          "odf_plus_aspiring_villages",
+          "odf_plus_rising_villages",
+          "odf_plus_model_villages"
+        ],
+        "ratio": {
+          "odf_plus_villages_pct": [
+            "odf_plus_villages",
+            "total_villages"
+          ],
+          "odf_plus_model_villages_pct": [
+            "odf_plus_model_villages",
+            "total_villages"
+          ]
+        }
+      },
+      "rows": 66,
+      "districts": 33,
+      "columns": 13,
+      "first_year": 2022,
+      "last_year": 2026,
+      "csv_kb": 5,
+      "json_kb": 23,
+      "metrics": [
+        "odf_plus_villages_pct",
+        "odf_plus_model_villages_pct"
+      ]
+    }
+  ],
+  "catalog": [
+    {
+      "slug": "temperature",
+      "code": "BN-DATA-CLM-001",
+      "folder": "CLM_temperature-indices_1951-to-2024_MH_BNY_DIST",
+      "title": "Temperature and heat by district",
+      "theme": "Climate",
+      "featured": 1,
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/CLM_temperature-indices_1951-to-2024_MH_BNY_DIST",
+      "summary": "One row per district per year: average and extreme daily maximum and minimum temperature, hot days, heat wave days and warm nights. Computed by Bharatnomy from IMD's daily gridded temperature; IMD does not publish these indicators as a district table.",
+      "period": "1951 to 2024",
+      "source": "India Meteorological Department (IMD), Pune. Daily maximum and minimum temperature on a 1.0 x 1.0 degree grid (Srivastava et al. 2009), 1951-2024",
+      "source_url": "https://imdpune.gov.in/lrfindex.php",
+      "downloaded": "28 Oct 2026",
+      "rows": 2590,
+      "columns": 22,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "year",
+        "tmax_mean_c",
+        "tmin_mean_c",
+        "tmax_highest_c",
+        "tmin_highest_c",
+        "tmin_lowest_c",
+        "tmax_mean_mar_may_c",
+        "tmin_mean_mar_may_c",
+        "days_tmax_40c_or_more",
+        "days_tmax_45c_or_more",
+        "heatwave_days",
+        "severe_heatwave_days",
+        "warm_nights",
+        "days_tmax_above_p90",
+        "nights_tmin_above_p90",
+        "decade",
+        "tmax_mean_anomaly_c",
+        "heatwave_days_anomaly"
+      ],
+      "districts": 35,
+      "csv_kb": 266,
+      "json_kb": 1287,
+      "zip_kb": 178
+    },
+    {
+      "slug": "rainfall",
+      "code": "BN-DATA-CLM-002",
+      "folder": "CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST",
+      "title": "Rainfall and monsoon by district",
+      "theme": "Climate",
+      "featured": 2,
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/CLM_rainfall-indices_1951-to-2025_MH_BNY_DIST",
+      "summary": "One row per district per year: annual and seasonal rainfall with departure from normal, rainy and heavy-rain days, the wettest day and wettest 5 days, dry spells, and a drought index (SPI). Computed by Bharatnomy from IMD's daily gridded rainfall; IMD does not publish these indicators as a district table.",
+      "period": "1951 to 2025",
+      "source": "India Meteorological Department (IMD), Pune. Daily rainfall on a 0.25 x 0.25 degree grid (Pai et al. 2014), 1951-2025",
+      "source_url": "https://imdpune.gov.in/lrfindex.php",
+      "downloaded": "28 Oct 2026",
+      "rows": 2625,
+      "columns": 27,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "year",
+        "rainfall_annual_mm",
+        "rainfall_mar_may_mm",
+        "rainfall_jun_sep_mm",
+        "rainfall_oct_dec_mm",
+        "rainy_days_2_5mm",
+        "heavy_rain_days_64_5mm",
+        "very_heavy_rain_days_115_6mm",
+        "extremely_heavy_rain_days_204_5mm",
+        "rx1day_mm",
+        "rx5day_mm",
+        "consecutive_dry_days",
+        "monsoon_dry_spells_7day",
+        "monsoon_longest_dry_spell_days",
+        "rainfall_annual_departure_pct",
+        "rainfall_mar_may_departure_pct",
+        "rainfall_jun_sep_departure_pct",
+        "rainfall_oct_dec_departure_pct",
+        "spi_annual",
+        "spi_jun_sep",
+        "decade",
+        "monsoon_category",
+        "monsoon_drought_class"
+      ],
+      "districts": 35,
+      "csv_kb": 348,
+      "json_kb": 1875,
+      "zip_kb": 280
+    },
+    {
+      "slug": "air-quality",
+      "code": "BN-DATA-ENV-001",
+      "folder": "ENV_aqi-days-by-category_2015-to-2026_MH_BNY_DIST",
+      "title": "Air quality days by district",
+      "theme": "Environment",
+      "featured": 3,
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/ENV_aqi-days-by-category_2015-to-2026_MH_BNY_DIST",
+      "summary": "Per Maharashtra district and year: how many city-days the CPCB daily AQI bulletin put the district's monitored cities in each AQI category, the share of city-days with AQI above 100, and the mean and highest AQI. Pooled by Bharatnomy over the cities of each district.",
+      "period": "2015 to 2026",
+      "source": "Central Pollution Control Board (CPCB), National Air Quality Index daily bulletins (4 pm)",
+      "source_url": "https://cpcb.nic.in/AQI_Bulletin.php",
+      "downloaded": "28 Oct 2026 (bulletins); counted 24 Nov 2026",
+      "rows": 154,
+      "columns": 17,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "year",
+        "cities",
+        "city_days_reported",
+        "city_days_good",
+        "city_days_satisfactory",
+        "city_days_moderate",
+        "city_days_poor",
+        "city_days_very_poor",
+        "city_days_severe",
+        "city_days_aqi_above_100",
+        "city_days_aqi_above_100_pct",
+        "aqi_mean",
+        "aqi_highest"
+      ],
+      "districts": 25,
+      "csv_kb": 13,
+      "json_kb": 59,
+      "zip_kb": 12
+    },
+    {
+      "slug": "power-stations",
+      "code": "BN-DATA-ENG-001",
+      "folder": "ENG_power-station-generation-co2_2017-18-to-2025-26_MH_BNY_DIST",
+      "title": "Power station generation and CO2",
+      "theme": "Energy",
+      "featured": 4,
+      "lens": "Energy policy & markets",
+      "path": "states/maharashtra/energy-policy/ENG_power-station-generation-co2_2017-18-to-2025-26_MH_BNY_DIST",
+      "summary": "Every grid-connected thermal (coal, gas, oil), hydro and nuclear power station in Maharashtra listed by the Central Electricity Authority, with the district it stands in, and for each year its net generation, CO2 emitted and CO2 per MWh. 55 stations, 9 years. Sum by district for district totals.",
+      "period": "2017-18 to 2025-26",
+      "source": "Central Electricity Authority (CEA), CO2 Baseline Database for the Indian Power Sector, Version 22.0 (1 August 2026), station rows for Maharashtra",
+      "source_url": "https://cea.nic.in/cdm-co2-baseline-view?mappingId=234&lang=en",
+      "downloaded": "17 Nov 2026 (CEA file); districts assigned 24 Nov 2026",
+      "rows": 495,
+      "columns": 15,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "station",
+        "year",
+        "capacity_mw_2026_03_31",
+        "sector",
+        "owner",
+        "type",
+        "fuel_1",
+        "fuel_2",
+        "net_generation_gwh",
+        "co2_emissions_t",
+        "co2_intensity_t_per_mwh"
+      ],
+      "districts": 22,
+      "csv_kb": 48,
+      "json_kb": 161,
+      "zip_kb": 22
+    },
+    {
+      "slug": "forest-cover",
+      "code": "BN-DATA-ENV-002",
+      "folder": "ENV_forest-cover_2023_MH_FSI_DIST",
+      "title": "Forest cover by district",
+      "theme": "Environment",
+      "featured": 5,
+      "summary": "Forest cover in every Maharashtra district by canopy density, from the India State of Forest Report 2023. Forest cover = land of 1 ha or more with tree canopy density of at least 10%.",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/ENV_forest-cover_2023_MH_FSI_DIST",
+      "period": "2023",
+      "source": "Forest Survey of India (FSI), MoEFCC, India State of Forest Report 2023, Volume II, Table 10.x.3 of each state chapter",
+      "source_url": "https://fsi.nic.in/forest-report-2023",
+      "downloaded": "19 Oct 2026",
+      "rows": 36,
+      "columns": 13,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "geographical_area_sq_km",
+        "very_dense_forest_sq_km",
+        "moderately_dense_forest_sq_km",
+        "open_forest_sq_km",
+        "forest_cover_total_sq_km",
+        "forest_cover_pct_of_area",
+        "change_since_2021_sq_km",
+        "scrub_sq_km",
+        "source_marks"
+      ],
+      "districts": 36,
+      "csv_kb": 3,
+      "json_kb": 13,
+      "zip_kb": 5
+    },
+    {
+      "slug": "cyclones",
+      "code": "BN-DATA-CLM-003",
+      "folder": "CLM_cyclone-crossings_1982-to-2025_MH_BNY_DIST",
+      "title": "Cyclones crossing each district",
+      "theme": "Climate",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/CLM_cyclone-crossings_1982-to-2025_MH_BNY_DIST",
+      "summary": "For every district and year: how many depressions and cyclones passed over it, how many of them were at cyclone strength (or stronger) while doing so, and the strongest wind. Computed by Bharatnomy from IMD's best tracks.",
+      "period": "1982 to 2025",
+      "source": "India Meteorological Department (IMD), RSMC New Delhi, best tracks of cyclonic disturbances over the North Indian Ocean, as cleaned in [`CLM_cyclone-best-tracks_1982-to-2026_IN_IMD`](https://github.com/sarveshkant2003-afk/bharatnomy-data/tree/ff7d662c4206e81ed483c708cd23a4ab4c946d2c/CLM_cyclone-best-tracks_1982-to-2026_IN_IMD/)",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/report.php?internal_menu=MzM=",
+      "downloaded": "12 Nov 2026",
+      "rows": 1540,
+      "columns": 11,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "district_census_code",
+        "year",
+        "systems_crossing",
+        "cyclonic_storms_crossing_34kt",
+        "severe_cyclonic_storms_crossing_48kt",
+        "very_severe_cyclonic_storms_crossing_64kt",
+        "max_wind_over_district_kt"
+      ],
+      "districts": 35,
+      "csv_kb": 69,
+      "json_kb": 473,
+      "zip_kb": 15
+    },
+    {
+      "slug": "rainfall-variability",
+      "code": "BN-DATA-CLM-004",
+      "folder": "CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
+      "title": "Rainfall variability by district",
+      "theme": "Climate",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/CLM_rainfall-variability_1971-to-2020_MH_BNY_DIST",
+      "summary": "One row per district: average yearly rainfall over 1971-2020, its standard deviation, and the coefficient of variation (how much rainfall swings from year to year). Computed by Bharatnomy from IMD's daily gridded rainfall.",
+      "period": "1971 to 2020",
+      "source": "India Meteorological Department (IMD), Pune. Daily rainfall on a 0.25 x 0.25 degree grid (Pai et al. 2014)",
+      "source_url": "https://imdpune.gov.in/lrfindex.php",
+      "downloaded": "28 Oct 2026",
+      "rows": 35,
+      "columns": 13,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "district_census_code",
+        "period",
+        "rainfall_annual_mean_mm",
+        "rainfall_annual_sd_mm",
+        "rainfall_annual_cv_pct",
+        "rainfall_jun_sep_mean_mm",
+        "rainfall_jun_sep_sd_mm",
+        "rainfall_jun_sep_cv_pct",
+        "years"
+      ],
+      "districts": 35,
+      "csv_kb": 3,
+      "json_kb": 12,
+      "zip_kb": 5
+    },
+    {
+      "slug": "wind-resource",
+      "code": "BN-DATA-CLM-005",
+      "folder": "CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
+      "title": "Wind resource at 100 m by district",
+      "theme": "Energy",
+      "lens": "Energy policy & markets",
+      "path": "states/maharashtra/energy-policy/CLM_wind-resource-100m_2008-to-2017_MH_BNY_DIST",
+      "summary": "How much wind energy is available at turbine hub height (100 m) in each district: the long-term mean wind power density and wind speed, and their 90th percentile across the district (wind farms use the windiest spots). Computed by Bharatnomy from the Global Wind Atlas.",
+      "period": "2008 to 2017",
+      "source": "Global Wind Atlas 3 (Technical University of Denmark, DTU, with the World Bank / ESMAP), mean power density and mean wind speed at 100 m on a 250 m grid; modelled from ERA5 reanalysis for 2008-2017, downscaled with WRF and WAsP. Licence CC BY 4.0 (see globalwindatlas.info)",
+      "source_url": "https://globalwindatlas.info/",
+      "downloaded": "12 Nov 2026 (rasters not committed, about 425 MB; `pipelines/global-wind-atlas/fetch_gwa.sh` downloads them, see [`_sources/global-wind-atlas/`](https://github.com/sarveshkant2003-afk/bharatnomy-data/tree/ff7d662c4206e81ed483c708cd23a4ab4c946d2c/_sources/global-wind-atlas/))",
+      "rows": 35,
+      "columns": 11,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "district_census_code",
+        "power_density_100m_mean_w_m2",
+        "power_density_100m_p90_w_m2",
+        "wind_speed_100m_mean_ms",
+        "wind_speed_100m_p90_ms",
+        "raster_coverage_pct",
+        "source_flag"
+      ],
+      "districts": 35,
+      "csv_kb": 2,
+      "json_kb": 10,
+      "zip_kb": 5
+    },
+    {
+      "slug": "active-fires",
+      "code": "BN-DATA-ENV-003",
+      "folder": "ENV_active-fires_2001-to-2025_MH_BNY_DIST",
+      "title": "Satellite fire detections by district",
+      "theme": "Environment",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/ENV_active-fires_2001-to-2025_MH_BNY_DIST",
+      "summary": "One row per district per year: number of vegetation fires detected by NASA's MODIS satellites (Terra and Aqua), in total and by season. Used as a measure of crop-residue and forest burning. Counted by Bharatnomy from NASA FIRMS.",
+      "period": "2001 to 2025",
+      "source": "NASA Fire Information for Resource Management System (FIRMS), MODIS Collection 6.1 active fire detections (1 km), India country files",
+      "source_url": "https://firms.modaps.eosdis.nasa.gov/country/",
+      "downloaded": "5 Nov 2026",
+      "rows": 875,
+      "columns": 14,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "year",
+        "fire_detections",
+        "fire_detections_confidence_30_plus",
+        "fire_detections_jan_feb",
+        "fire_detections_mar_may",
+        "fire_detections_jun_sep",
+        "fire_detections_oct_dec",
+        "share_mar_may_pct",
+        "share_oct_dec_pct",
+        "rank_in_state_year"
+      ],
+      "districts": 35,
+      "csv_kb": 53,
+      "json_kb": 307,
+      "zip_kb": 39
+    },
+    {
+      "slug": "power-plants",
+      "code": "BN-DATA-ENG-002",
+      "folder": "ENG_power-plants_2021_MH_WRI_DIST",
+      "title": "Power plants with location",
+      "theme": "Energy",
+      "summary": "Every power plant in Maharashtra in WRI's Global Power Plant Database (2021 release), of every fuel: capacity, coordinates, owner and commissioning year as WRI published them, plus the district each plant stands in.",
+      "lens": "Energy policy & markets",
+      "path": "states/maharashtra/energy-policy/ENG_power-plants_2021_MH_WRI_DIST",
+      "period": "2021",
+      "source": "World Resources Institute (WRI), Global Power Plant Database v1.3.0 (released June 2021). Licence CC BY 4.0. WRI compiled it from CEA (capacity data year 2019 for 492 plants), Wiki-Solar, CDM project documents and company sources; the `source` column names each one.",
+      "source_url": "https://datasets.wri.org/dataset/globalpowerplantdatabase",
+      "downloaded": "24 Nov 2026",
+      "rows": 190,
+      "columns": 24,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "district_census_code",
+        "plant",
+        "gppd_idnr",
+        "capacity_mw",
+        "latitude",
+        "longitude",
+        "primary_fuel",
+        "other_fuel1",
+        "other_fuel2",
+        "other_fuel3",
+        "commissioning_year",
+        "owner",
+        "source",
+        "url",
+        "geolocation_source",
+        "wepp_id",
+        "year_of_capacity_data",
+        "generation_data_source",
+        "district_match",
+        "source_flag"
+      ],
+      "districts": 29,
+      "csv_kb": 35,
+      "json_kb": 111,
+      "zip_kb": 23
+    },
+    {
+      "slug": "solar-resource",
+      "code": "BN-DATA-ENG-003",
+      "folder": "ENG_solar-resource_1999-to-2018_MH_BNY_DIST",
+      "title": "Solar resource by district",
+      "theme": "Energy",
+      "lens": "Energy policy & markets",
+      "path": "states/maharashtra/energy-policy/ENG_solar-resource_1999-to-2018_MH_BNY_DIST",
+      "summary": "How much sunlight reaches the ground and how much electricity a solar panel would produce in every district: long-term averages of daily irradiation (global, direct, diffuse, at optimum tilt), potential PV output per kW of panels, the best panel tilt, and air temperature. Computed by Bharatnomy from the Global Solar Atlas.",
+      "period": "1999 to 2018",
+      "source": "Global Solar Atlas 2.0 (Solargis, for the World Bank / ESMAP), India country GIS data, long-term averages of daily totals (`India_GISdata_LTAy_AvgDailyTotals_GlobalSolarAtlas-v2_GEOTIFF`). Irradiation and PV output cover 1999-2018, air temperature 1994-2018. CC BY 4.0",
+      "source_url": "https://globalsolaratlas.info/download/india",
+      "downloaded": "18 Nov 2026 (rasters not committed, about 820 MB; `pipelines/global-solar-atlas/fetch_gsa.sh` downloads them, see [`_sources/global-solar-atlas/`](https://github.com/sarveshkant2003-afk/bharatnomy-data/tree/ff7d662c4206e81ed483c708cd23a4ab4c946d2c/_sources/global-solar-atlas/))",
+      "rows": 35,
+      "columns": 13,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "district_census_code",
+        "ghi_kwh_m2_day",
+        "dni_kwh_m2_day",
+        "dif_kwh_m2_day",
+        "gti_kwh_m2_day",
+        "pvout_kwh_kwp_day",
+        "optimum_tilt_deg",
+        "air_temperature_c",
+        "raster_coverage_pct"
+      ],
+      "districts": 35,
+      "csv_kb": 3,
+      "json_kb": 11,
+      "zip_kb": 6
+    },
+    {
+      "slug": "odf-plus-villages",
+      "code": "BN-DATA-WAT-001",
+      "folder": "WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
+      "title": "ODF Plus villages by district",
+      "theme": "Water & sanitation",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/WAT_odf-plus-villages_2022-to-2026_MH_MOJS_DIST",
+      "summary": "How many villages in each district the Swachh Bharat Mission (Grameen) counts as ODF Plus, split into its three grades, on two dates: 1 April 2022 and 24 November 2026. ODF Plus means a village that stays open-defecation free and also manages its solid and liquid waste. The three grades are **Aspiring** (ODF sustained plus solid *or* liquid waste management), **Rising** (both solid and liquid waste management) and **Model** (both, plus visual cleanliness and IEC).",
+      "period": "2022 to 2026",
+      "source": "Department of Drinking Water and Sanitation, Ministry of Jal Shakti: Swachh Bharat Mission (Grameen) dashboard",
+      "source_url": "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx",
+      "downloaded": "24 Nov 2026 (saved page: `_sources/mojs-sbmg/raw/mojs-sbmg_states-dashboard_2026-11-24.html`)",
+      "rows": 68,
+      "columns": 13,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "sbm_district_code",
+        "date",
+        "total_villages",
+        "odf_plus_villages",
+        "odf_plus_aspiring_villages",
+        "odf_plus_rising_villages",
+        "odf_plus_model_villages",
+        "odf_plus_villages_pct",
+        "odf_plus_model_villages_pct"
+      ],
+      "districts": 34,
+      "csv_kb": 5,
+      "json_kb": 23,
+      "zip_kb": 7
+    },
+    {
+      "slug": "rural-tap-water",
+      "code": "BN-DATA-WAT-002",
+      "folder": "WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
+      "title": "Rural tap water connections by district",
+      "theme": "Water & sanitation",
+      "lens": "Climate adaptation & resilience",
+      "path": "states/maharashtra/climate-adaptation/WAT_tap-water-connections-rural_2026-10_MH_MOJS_DIST",
+      "summary": "Number of rural households and how many have a functional household tap connection under the Jal Jeevan Mission (JJM), for every district, as shown on the JJM dashboard on 28 Oct 2026.",
+      "period": "2026-10",
+      "source": "Department of Drinking Water & Sanitation, Ministry of Jal Shakti, Jal Jeevan Mission IMIS",
+      "source_url": "https://ejalshakti.gov.in/jjmreport/JJMIndia.aspx",
+      "downloaded": "28 Oct 2026",
+      "rows": 34,
+      "columns": 11,
+      "column_names": [
+        "state_ut",
+        "lgd_state_code",
+        "district",
+        "lgd_district_code",
+        "date",
+        "jjm_district_code",
+        "total_households",
+        "households_with_tap",
+        "households_with_tap_pct",
+        "households_with_tap_on_2019_08_15",
+        "households_without_tap"
+      ],
+      "districts": 34,
+      "csv_kb": 3,
+      "json_kb": 10,
+      "zip_kb": 5
     }
   ]
 }

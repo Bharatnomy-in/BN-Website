@@ -680,6 +680,12 @@ interface Stats {
         text: string;
     }[];
     datasets: DatasetMeta[];
+    catalog: CatalogEntry[];
+}
+interface CatalogEntry {
+    slug: string; code: string; folder: string; title: string; theme: string; featured?: number;
+    lens: string; path: string; summary: string; period: string | null; source: string; source_url: string | null; downloaded: string | null;
+    rows: number; columns: number; column_names: string[]; districts: number; csv_kb: number; json_kb: number; zip_kb: number;
 }
 interface DecadeFrames {
     metric: string;
@@ -873,8 +879,8 @@ const SMALL_DISTRICT_NOTE = SMALL;
 // the warehouse, already joined on LGD codes. To move to newer data, change
 // DATA_REF to a newer commit of DATA_REPO and run `npm run data`.
 
-const DATA_REPO = 'https://github.com/sarveshkant2003-afk/bharatnomy-front';
-const DATA_REF = '7d9978fd6699bf5b7c83328f57bb257d099ce98a';
+const DATA_REPO = 'https://github.com/Bharatnomy-in/BN-FRONT';
+const DATA_REF = '5ced7f6577ce1abaef9bbc6ce8c41c20de32c687';
 
 // Set DATA_LOCAL=/path/to/a/checkout to build from a local copy instead of
 // cloning (offline work). The commit stamp is then read from that checkout.
@@ -887,7 +893,7 @@ const STATES_MAPPED = [STATE];
 // All-India state outlines for the home page, dissolved from the Census 2011
 // district map (DataMeet) kept in the warehouse. Boundaries are those of 2011.
 const INDIA_BOUNDARIES = {
-  repo: 'https://github.com/sarveshkant2003-afk/bharatnomy-data',
+  repo: 'https://github.com/Bharatnomy-in/BN-DATA',
   ref: 'cd7ce2d673103cc0e606e3cc37e49a9ae75f849a',
   dir: '_sources/datameet-maps/raw',
   file: 'datameet-maps_census2011-districts_2011.shp',
@@ -949,7 +955,7 @@ const lensTab = (o: any) => { const roman = ['I','II','III','IV','V'][o.n - 1]; 
 const folio = (o: any) => `<p class="folio label${o.sticky ? ' folio--sticky' : ''}${o.class ? ' ' + o.class : ''}"><span>${escapeHtml(o.code)}</span>${o.chapter ? `<span class="folio-sep" aria-hidden="true">·</span><span>CH. ${escapeHtml(o.chapter)}</span>` : ''}<span class="folio-sep" aria-hidden="true">·</span><span>${escapeHtml(o.title)}</span></p>`;
 const legend = (o: any) => { const gaps = [12,8,5.5,3.6,2.5]; return `<figure class="legend${o.class ? ' ' + o.class : ''}" style="--tilt:${tilt(o.seed ?? o.title, 0)}deg"><figcaption class="label legend-title">${escapeHtml(o.title)}</figcaption>${o.hachure ? `<div class="legend-hatch"><svg viewBox="0 0 150 22" width="150" height="22" aria-hidden="true">${gaps.map((g,i)=>`<svg x="${i*30}" y="0" width="28" height="22" viewBox="0 0 28 22">${Array.from({length:Math.ceil(50/g)+1},(_,k)=>`<line x1="${k*g-20}" y1="22" x2="${k*g}" y2="0" stroke="currentColor" stroke-width="0.7"/>`).join('')}<rect x="0.5" y="0.5" width="27" height="21" fill="none" stroke="currentColor" stroke-width="0.75"/></svg>`).join('')}</svg><p class="label"><span>SPARSE = FEW HOT DAYS</span><span>DENSE = MANY</span></p>${o.range ? `<p class="mono legend-range">${escapeHtml(o.range)}</p>` : ''}</div>` : `<ul class="legend-list">${(o.entries ?? []).map((e:any)=>`<li><span class="legend-swatch" style="background:${escapeHtml(e.color)}"></span><span class="mono">${escapeHtml(e.label)}</span></li>`).join('')}${o.nodata ? '<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">no data</span></li>' : ''}</ul>`}</figure>`; };
 const trendFigure = (o: any) => `<figure class="trendfig${o.class ? ' ' + o.class : ''}">${o.caption ? `<p class="label trendfig-cap">${escapeHtml(o.caption)}</p>` : ''}<div class="trendfig-plot">${renderTrend(o)}</div><figcaption class="source label">SOURCE: ${escapeHtml(o.source)}${o.href ? ` · <a href="${escapeHtml(o.href)}">OPEN IN ATLAS</a>` : ''}</figcaption></figure>`;
-const specimenTag = (o: any) => { const d=o.dataset, key=o.seed ?? d?.code ?? o.planned ?? 'tag'; const dg=tilt(key,1), drop=Math.round(rng(key+'drop')()*20), H=o.headingTag??'h3'; const basePath=d?u(`/data/${d.slug}/${d.folder}`):''; return `<article class="tag${d?'':' tag--planned'}${o.class?' '+o.class:''}" style="--tilt:${dg}deg; --drop:${drop}px"><span class="tag-string" aria-hidden="true"></span><span class="tag-hole" aria-hidden="true"></span>${d?`<p class="label tag-code">${escapeHtml(d.code)}</p><${H} class="display tag-title"><a href="${u(`/datasets/${d.slug}`)}">${escapeHtml(d.title)}</a></${H}><p class="label tag-cover">${escapeHtml(o.state??'Maharashtra').toUpperCase()} · ${d.districts} DISTRICTS · ${d.first_year}–${d.last_year}</p><dl class="tag-facts label"><div><dt>Columns</dt><dd class="num">${d.columns}</dd></div><div><dt>Rows</dt><dd class="num">${d.rows.toLocaleString('en-IN')}</dd></div><div><dt>Formats</dt><dd>CSV · JSON</dd></div><div><dt>Size</dt><dd class="num">${d.csv_kb} KB CSV</dd></div></dl><p class="tag-dl"><a href="${basePath}.csv" download>CSV</a><a href="${basePath}.json" download>JSON</a><a href="${u(`/datasets/${d.slug}`)}">Dataset page</a></p>`:`<p class="label tag-code">COMING</p><${H} class="display tag-title">${escapeHtml(o.planned)}</${H}>${o.note?`<p class="tag-note">${escapeHtml(o.note)}</p>`:''}`}</article>`; };
+const specimenTag = (o: any) => { const d=o.dataset, key=o.seed ?? d?.code ?? o.planned ?? 'tag'; const dg=tilt(key,1), drop=Math.round(rng(key+'drop')()*20), H=o.headingTag??'h3'; return `<article class="tag${d?'':' tag--planned'}${o.class?' '+o.class:''}" style="--tilt:${dg}deg; --drop:${drop}px"><span class="tag-string" aria-hidden="true"></span><span class="tag-hole" aria-hidden="true"></span>${d?`<p class="label tag-code">${escapeHtml(d.code)}</p><${H} class="display tag-title"><a href="${u(`/datasets/${d.slug}`)}">${escapeHtml(d.title)}</a></${H}><p class="label tag-cover">${escapeHtml(o.state??'Maharashtra').toUpperCase()} · ${d.districts} ${d.districts === 1 ? 'DISTRICT' : 'DISTRICTS'} · ${escapeHtml(d.period ?? '')}</p><dl class="tag-facts label"><div><dt>Columns</dt><dd class="num">${d.columns}</dd></div><div><dt>Rows</dt><dd class="num">${d.rows.toLocaleString('en-IN')}</dd></div><div><dt>Formats</dt><dd>CSV · JSON · README</dd></div><div><dt>Zip</dt><dd class="num">${d.zip_kb} KB</dd></div></dl><p class="tag-dl"><a href="${u(`/data/${d.slug}/${d.folder}.zip`)}" download>Download zip</a><a href="${u(`/datasets/${d.slug}`)}">Dataset page</a></p>`:`<p class="label tag-code">COMING</p><${H} class="display tag-title">${escapeHtml(o.planned)}</${H}>${o.note?`<p class="tag-note">${escapeHtml(o.note)}</p>`:''}`}</article>`; };
 const sketchMap = (o: any) => { const fc=districtsGeo(); const fitTo=o.extend?{type:'FeatureCollection',features:[...fc.features,{type:'Feature',properties:{},geometry:{type:'MultiPoint',coordinates:[[o.extend[0],o.extend[1]],[o.extend[2],o.extend[3]]]}}]}:stateGeo(); const frame=frameFor(fitTo,o.width??640,o.height??470,o.pad??14); const ds=sketchDistricts(fc,{frame,values:o.values,range:o.range,seedSalt:o.seedSalt??0}); const pts=(o.waypoints??[]).map((w:any,i:number)=>{let x:number,y:number;if(w.lgd){const d=ds.find((q:any)=>q.lgd===w.lgd)!;x=d.x;y=d.y;}else [x,y]=frame.project([w.lon,w.lat]);return {...w,x,y,n:String(i+1).padStart(2,'0'),ring:roughCircle(x,y,22,900+i)};}); const route=pts.length>1?'M'+pts.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L'):''; return `<svg class="sketch${o.colors?' sketch--color':''}${o.class?' '+o.class:''}" viewBox="0 0 ${o.width??640} ${o.height??470}" role="img" aria-label="${escapeHtml(o.title)}">${o.desc?`<desc>${escapeHtml(o.desc)}</desc>`:''}<g class="sketch-districts">${ds.map((d:any)=>`<g class="sk-d${d.lgd===o.selected?' is-selected':''}" data-lgd="${d.lgd}" data-name="${escapeHtml(d.name)}"><path class="sk-hit" d="${d.plain}"${o.colors?.[d.lgd]?` style="fill:${o.colors[d.lgd]}"`:''}/>${d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:''}<path class="sk-line" d="${d.outline.join(' ')}"/><title>${escapeHtml(d.name)}${o.values?`: ${o.values[d.lgd]==null?'no data':fmt(o.values[d.lgd],0)}${o.unit?' '+o.unit:''}`:''}</title></g>`).join('')}</g>${route?`<path class="wp-route" d="${route}"/>`:''}${pts.map(p=>`<g class="wp" transform-origin="${p.x} ${p.y}"><circle cx="${p.x}" cy="${p.y}" r="11" class="wp-fill"/><path d="${p.ring}" class="wp-ring"/><text x="${p.x}" y="${p.y+3.5}" text-anchor="middle" class="wp-n">${p.n}</text><text x="${p.x+16}" y="${p.y+4}" class="wp-label">${escapeHtml(p.label)}</text></g>`).join('')}</svg>`; };
 const indiaSketch = (o:any={}) => { const width=o.width??620,height=o.height??700,cls=o.class??'',thaneId=o.thaneId??'sk-thane',mhId=o.mhId??'sk-mh';const india=indiaGeo(),frame=frameFor(india,width,height,8),states=sketchOutlines(india,frame,{roughness:.55}),mh=districtsGeo(),uniform=Object.fromEntries(mh.features.map((f:any)=>[String(f.properties.lgd),1])),ds=sketchDistricts(mh,{frame,values:uniform,range:[0,1],gap:[4.2,4.2],roughness:.5,hatchWeight:.5}),thane=ds.find((d:any)=>d.name==='Thane'),mhState=states.find((s:any)=>s.props.mapped),cx=ds.reduce((a:number,d:any)=>a+d.x,0)/ds.length,cy=ds.reduce((a:number,d:any)=>a+d.y,0)/ds.length,ring=roughCircle(cx,cy,22,4242);return `<svg class="india ${cls}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Map of India by state. Maharashtra is inked in with its 35 districts; other states are outlines, not yet mapped."><g class="india-states">${states.filter((s:any)=>!s.props.mapped).map((s:any)=>`<path d="${s.d}"><title>${escapeHtml(s.props.name)}: not yet mapped</title></path>`).join('')}</g><g class="india-mh" id="${mhId}"><g class="india-mh-fill">${ds.map((d:any)=>`<path d="${d.plain}"/>`).join('')}</g><g class="india-mh-hatch">${ds.map((d:any)=>`<path d="${d.hatch.join(' ')}"/>`).join('')}</g><g class="india-mh-lines">${ds.map((d:any)=>`<path class="draw" pathLength="1" d="${d.outline.join(' ')}"${d.name==='Thane'?` id="${thaneId}"`:''}><title>${escapeHtml(d.name)}</title></path>`).join('')}</g>${mhState?`<path class="india-mh-edge" d="${mhState.d}"/>`:''}</g><g class="india-wp" id="sk-mh-pt"><circle cx="${cx}" cy="${cy}" r="11" class="wp-fill"/><path d="${ring}" class="wp-ring"/><text x="${cx}" y="${cy+3.5}" text-anchor="middle" class="wp-n">01</text></g>${thane?`<circle cx="${thane.x}" cy="${thane.y}" r="1" fill="none" id="${thaneId}-pt"/>`:''}</svg>`; };
 const census = (slotHtml: string, o:any={}) => {
@@ -973,27 +979,74 @@ export function getStaticPaths() {
   // instead of calling the page-local stats() helper from the frontmatter.
   const statsPath = path.join(process.cwd(), 'public', 'data', 'stats.json');
   const datasetStats = JSON.parse(fs.readFileSync(statsPath, 'utf8')) as {
-    datasets: { slug: string }[];
+    catalog: { slug: string }[];
   };
 
   return [
     { params: { slug: undefined } },
-    ...datasetStats.datasets.map((dataset) => ({ params: { slug: dataset.slug } })),
+    ...datasetStats.catalog.map((dataset) => ({ params: { slug: dataset.slug } })),
   ];
 }
 
 const s = stats();
 const isIndex = Astro.params.slug == null;
-const planned = [
-  { title: 'Original survey data', note: 'Collected directly, for questions where existing data does not go deep enough.' },
-  { title: 'Cleaned government data', note: 'Numbers that already exist, made usable: the unglamorous work of normalising formats across sources.' },
-  { title: 'Proprietary indices', note: 'Composite measures we build ourselves, when no existing metric captures what we think matters.' },
-];
+// All datasets (catalog), the five on the hanging line, and this page's entry.
+const catalog = s.catalog;
+const featured = catalog.filter((c) => c.featured).sort((a, b) => a.featured! - b.featured!);
+const cat = catalog.find((c) => c.slug === Astro.params.slug);
+// Temperature and rainfall have the full page (map, trend); the rest a README page.
+const RICH = ['temperature', 'rainfall'];
+const isRich = !!cat && RICH.includes(cat.slug);
+// datasets that are also in the Atlas get an "Open in Atlas" button
+const inAtlas = !!cat && s.datasets.some((x) => x.slug === cat.slug);
+const gr = cat && !isRich ? parseReadme(readme(cat.slug)) : null;
+const zipHref = (c: CatalogEntry) => u(`/data/${c.slug}/${c.folder}.zip`);
+const themes = [...new Set(catalog.map((c) => c.theme))];
+
+// Citations in Chicago style (Chicago Manual of Style, 18th ed.): the dataset
+// title in italics and headline-style capitals, version = data commit, date =
+// that commit's date, URL = this site's page for the dataset.
+const SMALL_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'so', 'yet', 'as', 'at', 'by', 'in', 'of', 'on', 'per', 'to', 'up', 'via', 'vs', 'with', 'from', 'into']);
+const headline = (t: string) => t.split(' ').map((w, i, all) => {
+  if (/[A-Z0-9]/.test(w.slice(1)) || /^\d/.test(w) || w === 'm') return w;              // CO2, ODF, 100, m (unit)
+  if (i > 0 && i < all.length - 1 && SMALL_WORDS.has(w.toLowerCase())) return w.toLowerCase();
+  return w[0].toUpperCase() + w.slice(1);
+}).join(' ');
+const chicagoDate = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const pageUrl = (slug: string) => new URL(u(`/datasets/${slug}/`), Astro.site).href;
+const chicago = (c: CatalogEntry) => {
+  const title = `${headline(c.title)}, Maharashtra`;
+  const year = s.data.date.slice(0, 4), date = chicagoDate(s.data.date), url = pageUrl(c.slug);
+  const t = (x: string) => `<cite>${escapeHtml(x)}</cite>`;
+  const src = c.source.split(/[,(]/)[0].trim();
+  return {
+    bib: `Bharatnomy. ${t(title)}. Dataset ${c.code}, version ${s.data.short}. Bharatnomy, ${date}. ${url}.`,
+    note: `Bharatnomy, ${t(title)}, dataset ${c.code}, version ${s.data.short} (Bharatnomy, ${date}), ${url}.`,
+    short: `Bharatnomy, ${t(headline(c.title))}.`,
+    ref: `Bharatnomy. ${year}. ${t(title)}. Dataset ${c.code}, version ${s.data.short}. Bharatnomy. ${url}.`,
+    intext: `(Bharatnomy ${year})`,
+    src,
+  };
+};
+const citeBlock = (c: CatalogEntry, id: string) => {
+  const k = chicago(c);
+  const row = (label: string, html: string) => `<div class="cite-row"><p class="label soft">${label}</p><p class="cite-text" data-cite>${html}</p><button type="button" class="cite-copy label" data-cite-copy>Copy</button></div>`;
+  return `<div class="cite" id="${id}">
+    <p class="label cite-style">Chicago style · notes and bibliography</p>
+    ${row('Bibliography', k.bib)}
+    ${row('First note', `1. ${k.note}`)}
+    ${row('Later notes', `2. ${k.short}`)}
+    <p class="label cite-style">Chicago style · author-date</p>
+    ${row('Reference list', k.ref)}
+    ${row('In the text', k.intext)}
+    <p class="soft cite-foot">The figures come from ${escapeHtml(k.src)}; when your argument rests on them, cite that source too. Licence: CC BY 4.0.</p>
+  </div>`;
+};
 
 // The fallback is used only while rendering the listing route. The detail
 // branch is not rendered there; dataset URLs are generated from getStaticPaths.
-const d = s.datasets.find((x) => x.slug === Astro.params.slug) ?? s.datasets[0];
-const r = parseReadme(d.slug);
+const d = s.datasets.find((x) => x.slug === Astro.params.slug && RICH.includes(x.slug)) ?? s.datasets[0];
+const r = parseReadme(readme(d.slug));
 const sec = r.sections;
 const source = sec['Source'] ?? '';
 const scriptUrl = source.match(/\*\*Script:\*\*.*?\((https?:[^)]+)\)/)?.[1];
@@ -1014,10 +1067,10 @@ const atlas = u(`/atlas?dataset=${d.slug}&metric=${d.defaultMetric}&year=${lates
 const ds = districts();
 const top = Object.entries(vals).sort((a, b) => b[1] - a[1])[0];
 const topName = ds.find((x) => x.lgd === top[0])?.name;
-const pageTitle = isIndex ? 'Datasets' : d.title;
+const pageTitle = isIndex ? 'Datasets' : cat!.title;
 const pageDescription = isIndex
-  ? 'Cleaned, documented and free district-level datasets on India, starting with temperature and rainfall for Maharashtra.'
-  : r.intro.split('\n')[0];
+  ? `Cleaned, documented and free district-level datasets on India: ${catalog.length} for Maharashtra, from temperature and rainfall to air quality, power and forests.`
+  : isRich ? r.intro.split('\n')[0] : cat!.summary.split('\n')[0];
 
 ---
 <!doctype html>
@@ -1042,55 +1095,72 @@ const pageDescription = isIndex
       <>
       <div class="dsx">
         <header class="sheet dsx-head bleed bleed-clm">
-          <h1 class="display t-xl dsx-title">Datasets</h1>
+          <h1 class="display t-mega dsx-title">DATASETS</h1>
           <div class="dsx-intro">
-            <Fragment set:html={sticker(`${s.datasets.length} LIVE · ${planned.length} PLANNED`, {tone:"ink", seed:"dsx"})} />
+            <Fragment set:html={sticker(`${catalog.length} DATASETS · MAHARASHTRA`, {tone:"ink", seed:"dsx"})} />
             <p class="t-lead">Cleaned, documented and free. Every file carries its source, its method and the date we collected it.</p>
             <p class="soft">Reliable research depends on reliable data, and reliable data on India is often the harder half of the work: scattered across sources, inconsistently defined, or simply hard to find.</p>
           </div>
         </header>
 
-        <section class="sheet dsx-drawer" aria-label="Datasets, live and planned">
+        <section class="sheet dsx-drawer" aria-label="Featured datasets">
           <svg class="dsx-string" viewBox="0 0 1000 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,6 C220,20 780,20 1000,6" /></svg>
           <div class="dsx-tags">
-            {s.datasets.map((d) => <Fragment set:html={specimenTag({dataset:d, headingTag:"h2"})} />)}
-            {planned.map((p) => <Fragment set:html={specimenTag({planned:p.title, note:p.note, headingTag:"h2"})} />)}
+            {featured.map((c) => <Fragment set:html={specimenTag({dataset:c, headingTag:"h2"})} />)}
           </div>
         </section>
 
         <section class="sheet dsx-table-sec" aria-labelledby="dsx-table-h">
           <div class="dsx-table-head">
-            <h2 id="dsx-table-h" class="display t-m">All datasets, as a table</h2>
-            <p class="soft">CSV and JSON. Source and collection-date metadata in every release. Licence: CC BY 4.0. Cite as: Bharatnomy (2026), [dataset name].</p>
+            <h2 id="dsx-table-h" class="display t-m">All {catalog.length} datasets</h2>
+            <p class="soft">Each download is a zip with the CSV, the JSON and the README (source, method, columns). Licence: CC BY 4.0. <a href="#how-to-cite">How to cite</a>.</p>
+          </div>
+          <div class="dsx-search" role="search">
+            <label class="label" for="dsx-q">Search datasets</label>
+            <input id="dsx-q" type="search" placeholder="Try rainfall, CPCB, coal, district, 2023…" autocomplete="off" spellcheck="false" data-dsx-q />
+            <div class="dsx-themes" role="group" aria-label="Filter by theme">
+              <button type="button" class="dsx-theme label" data-dsx-theme="" aria-pressed="true">All</button>
+              {themes.map((t) => <button type="button" class="dsx-theme label" data-dsx-theme={t} aria-pressed="false">{t}</button>)}
+            </div>
+            <p class="label soft dsx-count" aria-live="polite" data-dsx-count>{catalog.length} of {catalog.length} datasets</p>
           </div>
           <div class="table-wrap">
-            <table class="dense" data-sortable>
+            <table class="dense dsx-table" data-sortable>
               <thead>
                 <tr>
                   <th scope="col"><button data-sort="text">Dataset</button></th>
-                  <th scope="col"><button data-sort="text">Lens</button></th>
-                  <th scope="col"><button data-sort="text">Geography</button></th>
-                  <th scope="col"><button data-sort="num">Years</button></th>
+                  <th scope="col"><button data-sort="text">Theme</button></th>
+                  <th scope="col"><button data-sort="text">Period</button></th>
+                  <th scope="col" class="r"><button data-sort="num">Districts</button></th>
                   <th scope="col" class="r"><button data-sort="num">Rows</button></th>
-                  <th scope="col"><button data-sort="text">Updated</button></th>
-                  <th scope="col">Formats</th>
+                  <th scope="col"><button data-sort="text">Source</button></th>
+                  <th scope="col">Download</th>
                 </tr>
               </thead>
               <tbody>
-                {s.datasets.map((d) => (
-                  <tr>
-                    <td><a href={u(`/datasets/${d.slug}`)}>{d.title}</a><span class="mono soft dense-code">{d.code}</span></td>
-                    <td>{d.lens}</td>
-                    <td>Maharashtra · {d.districts} districts</td>
-                    <td data-value={d.first_year} class="num">{d.first_year}–{d.last_year}</td>
-                    <td class="num r" data-value={d.rows}>{d.rows.toLocaleString('en-IN')}</td>
-                    <td class="num">{stampDate(s.data.date)}</td>
-                    <td><a href={u(`/data/${d.slug}/${d.folder}.csv`)} download>CSV</a> · <a href={u(`/data/${d.slug}/${d.folder}.json`)} download>JSON</a></td>
+                {catalog.map((c) => (
+                  <tr data-dsx-row data-theme={c.theme} data-search={[c.title, c.code, c.slug, c.theme, c.lens, c.period, c.source, c.summary, c.folder, ...c.column_names].join(' ').toLowerCase()}>
+                    <td><a href={u(`/datasets/${c.slug}`)}>{c.title}</a><span class="mono soft dense-code">{c.code}</span></td>
+                    <td>{c.theme}</td>
+                    <td class="num">{c.period}</td>
+                    <td class="num r" data-value={c.districts}>{c.districts}</td>
+                    <td class="num r" data-value={c.rows}>{c.rows.toLocaleString('en-IN')}</td>
+                    <td class="dsx-src">{c.source.split(/[,(.]/)[0]}</td>
+                    <td><a class="dsx-zip" href={zipHref(c)} download>Zip · {c.zip_kb} KB</a></td>
                   </tr>
                 ))}
+                <tr class="dsx-empty" data-dsx-empty hidden><td colspan="7">No dataset matches that search. Try a broader word, or <a href="mailto:namaste@bharatnomy.com?subject=Dataset%20request">tell us what you need</a>.</td></tr>
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section class="sheet dsx-cite-sec" id="how-to-cite" aria-labelledby="dsx-cite-h">
+          <div class="dsx-cite-head">
+            <h2 id="dsx-cite-h" class="display t-m">How to cite</h2>
+            <p class="soft">We follow the Chicago Manual of Style. Give the dataset's title in italics, its code, and the version (the data commit) you downloaded, so a reader can find the exact same numbers. Every dataset page has its citation ready to copy; here is the pattern, using {featured[0].title.toLowerCase()} as the example.</p>
+          </div>
+          <Fragment set:html={citeBlock(featured[0], 'cite-example')} />
         </section>
 
         <section class="sheet dsx-standard bleed bleed-mac" aria-labelledby="dsx-std-h">
@@ -1110,6 +1180,82 @@ const pageDescription = isIndex
           <p class="dsx-ask">If a specific dataset should exist and does not, tell us: <a href="mailto:namaste@bharatnomy.com?subject=Dataset%20request">namaste@bharatnomy.com</a>. That is genuinely useful input for what we build first.</p>
         </section>
       </div>
+      </>
+    ) : !isRich ? (
+      <>
+      <article class="lab sheet lab--plain">
+        <header class="lab-head">
+          <p class="label soft"><a href={u("/datasets")}>Datasets</a> / {cat!.code}</p>
+          <h1 class="display t-xl">{cat!.title}</h1>
+          <p class="label lab-cover">MAHARASHTRA · {cat!.districts} {cat!.districts === 1 ? 'DISTRICT' : 'DISTRICTS'} · {cat!.period} · {cat!.lens.toUpperCase()}</p>
+        </header>
+
+        <div class="lab-main">
+          <p class="t-lead lab-summary" set:html={inline(cat!.summary)} />
+
+          <section class="lab-sec" aria-labelledby="g-what">
+            <h2 id="g-what" class="display t-m">What is in it</h2>
+            <p>{cat!.rows.toLocaleString('en-IN')} rows and {cat!.columns} columns, covering {cat!.districts} of Maharashtra's districts{cat!.period ? `, ${cat!.period}` : ''}.</p>
+            <Fragment set:html={block(gr!.sections['Where this comes from'] ?? '')} />
+          </section>
+
+          {(gr!.sections['How it is computed'] || gr!.sections['Bharatnomy calculation']) && (
+            <section class="lab-sec" aria-labelledby="g-how">
+              <h2 id="g-how" class="display t-m">How it is computed</h2>
+              <Fragment set:html={block(gr!.sections['How it is computed'] ?? gr!.sections['Bharatnomy calculation'] ?? '')} />
+            </section>
+          )}
+
+          <section class="lab-sec" aria-labelledby="g-cols">
+            <h2 id="g-cols" class="display t-m">Columns</h2>
+            <div class="table-wrap">
+              <table class="dense">
+                <thead><tr><th scope="col">Column</th><th scope="col">Meaning</th><th scope="col">Unit</th></tr></thead>
+                <tbody>{tableRows(gr!.sections['Columns'] ?? '').map((c) => <tr><td><code>{c[0].replace(/`/g, '')}</code></td><td set:html={inline(c[3] ?? '')} /><td class="mono">{c[2] || '–'}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </section>
+
+          {bullets(gr!.sections['Notes from the warehouse'] ?? '').length > 0 && (
+            <section class="lab-sec" aria-labelledby="g-notes">
+              <h2 id="g-notes" class="display t-m">Notes and caveats</h2>
+              <ul>{bullets(gr!.sections['Notes from the warehouse'] ?? '').map((n) => <li set:html={inline(n)} />)}</ul>
+            </section>
+          )}
+
+          <section class="lab-sec" aria-labelledby="g-src">
+            <h2 id="g-src" class="display t-m">Source</h2>
+            <Fragment set:html={block(gr!.sections['Source'] ?? '')} />
+            <p>This release is built from the data repo at commit <a href={`${s.data.repo}/tree/${s.data.commit}/${cat!.path}`}><code>{s.data.short}</code></a> ({stampDate(s.data.date)}). Any change to the data or method will be listed here with its date.</p>
+          </section>
+
+          <section class="lab-sec" aria-labelledby="g-cite">
+            <h2 id="g-cite" class="display t-m">How to cite</h2>
+            <Fragment set:html={citeBlock(cat!, 'cite-' + cat!.slug)} />
+          </section>
+        </div>
+
+        <aside class="lab-side">
+          <div class="lab-side-inner">
+            <Fragment set:html={panel(`${cat!.code} · COVERAGE`, [
+              { label:'Districts', value:String(cat!.districts), note:'2011 BOUNDARIES' },
+              { label:'Period', value:cat!.period ?? '–' },
+              { label:'Rows', value:cat!.rows.toLocaleString('en-IN') },
+              { label:'Columns', value:String(cat!.columns) },
+              { label:'Licence', value:'CC BY 4.0' },
+            ], {tone:'clm', foot:`DATA @ ${s.data.short}`})} />
+            <div class="lab-dl">
+              <Fragment set:html={button(`Zip · CSV + JSON + README · ${cat!.zip_kb} KB`, {href:zipHref(cat!), download:true, primary:true, arrow:"↓"})} />
+              <Fragment set:html={button(`CSV · ${cat!.csv_kb} KB`, {href:u(`/data/${cat!.slug}/${cat!.folder}.csv`), download:true, arrow:"↓"})} />
+              <Fragment set:html={button(`JSON · ${cat!.json_kb} KB`, {href:u(`/data/${cat!.slug}/${cat!.folder}.json`), download:true, arrow:"↓"})} />
+              <Fragment set:html={button("README (.md)", {href:u(`/data/${cat!.slug}/README.md`), download:true, arrow:"↓"})} />
+              {inAtlas && <Fragment set:html={button("Open in Atlas", {href:u(`/atlas?dataset=${cat!.slug}`)})} />}
+            </div>
+            {cat!.source_url && <p class="lab-links mono"><a class="ext" href={cat!.source_url}>Original source</a></p>}
+            <Fragment set:html={sticker("CITE AS: BHARATNOMY (2026)", {seed:`cite-${cat!.slug}`})} />
+          </div>
+        </aside>
+      </article>
       </>
     ) : (
       <>
@@ -1168,7 +1314,7 @@ const pageDescription = isIndex
 
           <section class="lab-sec" aria-labelledby="s-cite">
             <h2 id="s-cite" class="display t-m">How to cite</h2>
-            <p class="cite mono">Bharatnomy (2026), {d.title}, {d.code}. Data from the India Meteorological Department. Licence: CC BY 4.0. https://bharatnomy.com/datasets/{d.slug}</p>
+            <Fragment set:html={citeBlock(cat!, 'cite-' + cat!.slug)} />
           </section>
         </div>
 
@@ -1182,7 +1328,8 @@ const pageDescription = isIndex
               { label:'Licence', value:'CC BY 4.0' },
             ], {tone:'clm', foot:`DATA @ ${s.data.short}`})} />
             <div class="lab-dl">
-              <Fragment set:html={button(`CSV · ${d.csv_kb} KB`, {href:u(`/data/${d.slug}/${d.folder}.csv`), download:true, primary:true, arrow:"↓"})} />
+              <Fragment set:html={button(`Zip · CSV + JSON + README · ${cat!.zip_kb} KB`, {href:zipHref(cat!), download:true, primary:true, arrow:"↓"})} />
+              <Fragment set:html={button(`CSV · ${d.csv_kb} KB`, {href:u(`/data/${d.slug}/${d.folder}.csv`), download:true, arrow:"↓"})} />
               <Fragment set:html={button(`JSON · ${d.json_kb} KB`, {href:u(`/data/${d.slug}/${d.folder}.json`), download:true, arrow:"↓"})} />
               <Fragment set:html={button("README (.md)", {href:u(`/data/${d.slug}/README.md`), download:true, arrow:"↓"})} />
               <Fragment set:html={button("Open in Atlas", {href:atlas})} />
@@ -1330,13 +1477,55 @@ for (const table of document.querySelectorAll('table[data-sortable]')) {
                 const v = c.dataset.value ?? c.textContent ?? '';
                 return num ? parseFloat(v.replace(/,/g, '')) : v.toLowerCase();
             };
-            const rows = Array.from(tbody.rows).sort((a, b) => {
+            // the "no results" row has one cell: it stays out of the sort, at the end
+            const empty = tbody.querySelector('[data-dsx-empty]');
+            const rows = Array.from(tbody.rows).filter((r) => r !== empty).sort((a, b) => {
                 const x = key(a), y = key(b);
                 return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1);
             });
             tbody.append(...rows);
+            if (empty) tbody.append(empty);
         });
     });
+}
+
+// Citation copy buttons: copy the plain text of the citation next to them.
+document.querySelectorAll('[data-cite-copy]').forEach((b) => b.addEventListener('click', async () => {
+    const text = b.parentElement.querySelector('[data-cite]').textContent.trim();
+    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
+    catch { b.textContent = 'Select and copy'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1800);
+}));
+
+// Dataset search: every word typed must appear in the row's title, code,
+// theme, source, summary or column names. Theme buttons narrow it further.
+// ?q=word in the URL fills the box, so a search can be linked to.
+const dsxQ = document.querySelector('[data-dsx-q]');
+if (dsxQ) {
+    const rows = Array.from(document.querySelectorAll('[data-dsx-row]'));
+    const empty = document.querySelector('[data-dsx-empty]');
+    const count = document.querySelector('[data-dsx-count]');
+    const themeBtns = Array.from(document.querySelectorAll('[data-dsx-theme]'));
+    let theme = '';
+    const apply = () => {
+        const words = dsxQ.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        for (const r of rows) {
+            const ok = (!theme || r.dataset.theme === theme) && words.every((w) => r.dataset.search.includes(w));
+            r.hidden = !ok;
+            if (ok) shown++;
+        }
+        empty.hidden = shown > 0;
+        count.textContent = `${shown} of ${rows.length} datasets`;
+    };
+    dsxQ.addEventListener('input', apply);
+    themeBtns.forEach((b) => b.addEventListener('click', () => {
+        theme = b.dataset.dsxTheme;
+        themeBtns.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        apply();
+    }));
+    const q = new URLSearchParams(location.search).get('q');
+    if (q) { dsxQ.value = q; apply(); }
 }
 
     </script>
@@ -1840,8 +2029,8 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 
 /* ------------------------------------------------------------ datasets */
 .dsx-head { padding-block: var(--s-8) var(--s-6); align-items: end; }
-.dsx-title { grid-column: 1 / 6; }
-.dsx-intro { grid-column: 6 / 12; display: grid; gap: var(--s-4); justify-items: start; }
+.dsx-title { grid-column: 1 / 7; font-size: clamp(4.5rem, 12vw, 11rem); line-height: 0.8; margin: 0 0 -0.06em -0.05em; }
+.dsx-intro { grid-column: 7 / 13; display: grid; gap: var(--s-4); justify-items: start; }
 .dsx-drawer { position: relative; padding-block: var(--s-6) var(--s-8); }
 .dsx-string { position: absolute; top: var(--s-6); left: 0; width: 100%; height: 24px; overflow: visible; grid-column: 1 / -1; }
 .dsx-string path { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
@@ -1851,6 +2040,25 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .dsx-table-sec { padding-block: var(--s-6); row-gap: var(--s-4); }
 .dsx-table-head { grid-column: 1 / 9; display: grid; gap: var(--s-2); }
 .dsx-table-sec .table-wrap { grid-column: 1 / -1; }
+.dsx-search { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--s-2) var(--s-4); }
+.dsx-search label { grid-column: 1 / -1; }
+.dsx-search input {
+  font: inherit; font-size: 1rem; color: var(--ink); background: var(--paper-raised);
+  border: 1px solid var(--ink); padding: 10px 14px; min-height: 44px; width: 100%;
+}
+.dsx-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dsx-themes { display: inline-flex; flex-wrap: wrap; border: var(--hair); background: var(--paper-raised); }
+.dsx-theme { font: inherit; font-size: 0.66rem; letter-spacing: var(--track-label); text-transform: uppercase; color: var(--ink); background: transparent; border: 0; padding: 8px 11px; min-height: 44px; cursor: pointer; }
+.dsx-theme + .dsx-theme { border-left: var(--hair); }
+.dsx-theme[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.dsx-theme:hover:not([aria-pressed="true"]) { background: var(--accent-wash); }
+.dsx-theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dsx-count { grid-column: 1 / -1; margin: 0; }
+.dsx-table tr[hidden] { display: none; }
+.dsx-src { max-width: 26ch; }
+.dsx-zip { white-space: nowrap; }
+.dsx-empty td { padding: var(--s-5) var(--s-4); color: var(--ink-soft); }
+.lab-sec .dense th:last-child, .lab-sec .dense td:last-child { white-space: nowrap; }
 .dsx-standard { padding-block: var(--s-8); row-gap: var(--s-5); align-items: start; }
 .dsx-panel { grid-column: 1 / 5; }
 .dsx-std-text { grid-column: 6 / 11; display: grid; gap: var(--s-3); }
@@ -1871,7 +2079,20 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .lab-sec p { margin: 0; }
 .lab-sec .table-wrap, .lab-sec .md-table { max-width: none; }
 .lab-small { font-size: var(--t-small); }
-.cite { background: var(--paper-raised); border: var(--hair); padding: var(--s-4); font-size: 0.85rem; line-height: 1.6; }
+.cite { background: var(--paper-raised); border: var(--hair); padding: var(--s-4) var(--s-5); display: grid; gap: var(--s-3); }
+.cite-style { margin: var(--s-2) 0 0; color: var(--accent); }
+.cite-style:first-child { margin-top: 0; }
+.cite-row { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) auto; gap: var(--s-1) var(--s-4); align-items: baseline; }
+.cite-row .label { margin: 0; }
+.cite-text { margin: 0; font-size: 0.95rem; line-height: 1.55; overflow-wrap: anywhere; }
+.cite-text cite { font-style: italic; }
+.cite-copy { font: inherit; font-size: 0.62rem; letter-spacing: var(--track-label); text-transform: uppercase; background: transparent; border: var(--hair); padding: 4px 8px; cursor: pointer; color: var(--ink); min-height: 28px; }
+.cite-copy:hover { background: var(--accent-wash); }
+.cite-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cite-foot { margin: var(--s-2) 0 0; font-size: 0.85rem; }
+.dsx-cite-sec { padding-block: var(--s-6) var(--s-8); row-gap: var(--s-4); }
+.dsx-cite-head { grid-column: 1 / 9; display: grid; gap: var(--s-2); }
+.dsx-cite-sec .cite { grid-column: 1 / -1; }
 .lab-side { grid-column: 9 / 13; grid-row: 1 / 3; align-self: stretch; }
 .lab-side-inner { position: sticky; top: var(--s-5); display: grid; gap: var(--s-5); }
 .lab-side .panel { max-width: none; }
@@ -1968,6 +2189,11 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
   .lab-head, .lab-main, .lab-side, .res-card, .res-sticker, .res-contents, .res-q, .res-notify,
   .spread-left, .spread-right, .howwe-text, .howwe-fig, .rules-toc, .rules-main, .job-card, .nf-text, .nf-map { grid-column: 1 / -1; grid-row: auto; }
   .dsx-tags { flex-direction: column; align-items: center; }
+  .dsx-title { font-size: 21vw; }
+  .dsx-search { grid-template-columns: 1fr; }
+  .dsx-cite-head { grid-column: 1 / -1; }
+  .cite-row { grid-template-columns: 1fr auto; }
+  .cite-row .label { grid-column: 1 / -1; }
   .dsx-string { display: none; }
   .dsx-tags::before { content: ""; position: absolute; left: 50%; top: var(--s-6); bottom: var(--s-8); border-left: 1px dashed var(--ink); }
   .dsx-drawer { position: relative; }

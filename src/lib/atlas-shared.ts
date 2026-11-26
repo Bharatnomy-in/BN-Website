@@ -100,6 +100,8 @@ export const STOPS = {
     warm: ['#F6EBD3', '#F0C46E', '#E07E3C', '#B53D2C', '#6B1F1D'],
     anomaly: ['#2F5D9A', '#9DB7D5', '#EEEDE6', '#E5A07C', '#A8322A'],
     wet: ['#EEF2E6', '#BCD9C6', '#6FB0AC', '#2C7C92', '#173F5C'],
+    // forest and sanitation: light sage to deep green (the macro lens colour)
+    forest: ['#EEF0E4', '#C9DBB3', '#8DB47F', '#4A7556', '#23412C'],
     wetdry: ['#8A5626', '#D6A86E', '#EEEDE6', '#7FC0B8', '#1E6E73'],
     // brown half of dry/wet, light to dark, for "longer dry spell = darker"
     dry: ['#F1EBDD', '#E2CDA6', '#D6A86E', '#B07B42', '#8A5626'],

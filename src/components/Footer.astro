@@ -80,7 +80,7 @@ const u = (p: string) => (/^(https?:|mailto:|#|data:)/.test(p) ? p : BASE + (p.s
 .back-mark {
   grid-column: 1 / -1; grid-row: 2;
   font-size: min(19vw, 17.5rem); line-height: 0.74; font-weight: 900; letter-spacing: -0.015em;
-  margin: var(--s-8) 0 -0.16em -0.04em; white-space: nowrap;
+  margin: var(--s-8) 0 0 -0.04em; padding-bottom: var(--s-6); white-space: nowrap;   /* the whole word shows */
 }
 .back-cols { grid-column: 7 / 13; grid-row: 1; display: grid; grid-template-columns: auto 1fr; gap: var(--s-8); }
 .back-cols nav { flex-direction: column; gap: var(--s-5) !important; }

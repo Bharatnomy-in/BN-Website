@@ -11,7 +11,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { csvParse } from 'd3-dsv';
-import { DATA_REPO, DATA_REF, STATE, STATES_MAPPED, BOUNDARIES_PATH, DATASETS, INDIA_BOUNDARIES } from '../src/config/data.mjs';
+import { zipSync } from 'fflate';
+import { DATA_REPO, DATA_REF, STATE, STATES_MAPPED, BOUNDARIES_PATH, DATASETS, INDIA_BOUNDARIES, CATALOG, CATALOG_EXCLUDED, LENS_FOLDERS } from '../src/config/data.mjs';
 import { METRICS } from '../src/config/metrics.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,7 +32,8 @@ function getRepo() {
     if (dirty) console.warn('WARNING: DATA_LOCAL has uncommitted changes under states/; the commit stamp will not describe them.');
     return { dir, sha: git(['rev-parse', 'HEAD'], dir), via: `local ${dir}` };
   }
-  const sparse = [path.posix.dirname(BOUNDARIES_PATH), ...DATASETS.map((d) => d.path)];
+  // the whole state folder: boundaries plus every dataset in the catalog
+  const sparse = [`states/${STATE.slug}`];
   if (!fs.existsSync(path.join(CACHE, '.git'))) {
     fs.mkdirSync(path.dirname(CACHE), { recursive: true });
     log(`cloning ${DATA_REPO} (sparse) ...`);
@@ -114,6 +116,24 @@ const quantile = (sorted, p) => { const i = (sorted.length - 1) * p; const lo = 
 const fmt = (v, d) => v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 const upper = (s) => s.toUpperCase();
 
+// --------------------------------------------------------- Palghar -> Thane
+// The map uses 2011 boundaries, when Thane still included Palghar (split off in
+// 2014). For tables published on today's districts, add Palghar's row into
+// Thane's for the same period: counts and areas add; shares are recomputed.
+function foldPalghar(ds, rows, metrics) {
+  const { sum = [], ratio = {} } = ds.fold;
+  const loose = metrics.map((m) => m.id).filter((id) => !sum.includes(id) && !(id in ratio));
+  if (loose.length) fail(`${ds.slug}: fold rule missing for metrics ${loose.join(', ')}`);
+  const pal = rows.filter((r) => r.district === 'Palghar');
+  for (const p of pal) {
+    const t = rows.find((r) => r.district === 'Thane' && r.__t === p.__t);
+    if (!t) fail(`${ds.slug}: Palghar row for ${p.__t} has no Thane row to fold into`);
+    for (const c of sum) t[c] = String(round((+t[c] || 0) + (+p[c] || 0), 2));
+    for (const [c, [num, den]] of Object.entries(ratio)) t[c] = +t[den] ? String(round((+t[num] / +t[den]) * 100, 2)) : '';
+  }
+  return rows.filter((r) => r.district !== 'Palghar');
+}
+
 // ------------------------------------------------------------------ 3. data
 function loadDataset(repoDir, ds) {
   const dir = path.join(repoDir, ds.path);
@@ -125,14 +145,20 @@ function loadDataset(repoDir, ds) {
   const metrics = METRICS.filter((m) => m.dataset === ds.slug);
   const absent = metrics.filter((m) => !cols.includes(m.id)).map((m) => m.id);
   if (absent.length) fail(`${ds.slug}: registry columns missing from CSV: ${absent.join(', ')}`);
-  const stateRows = rows.filter((r) => r.lgd_state_code === STATE.lgd);
-  const years = [...new Set(stateRows.map((r) => +r.year))].sort((a, b) => a - b);
+  let stateRows = rows.filter((r) => r.lgd_state_code === STATE.lgd);
+  // time key: a year column, the year of a date column, or one fixed year
+  const timeOf = ds.time === 'date' ? (r) => +String(r.date).slice(0, 4)
+    : ds.time === 'static' ? () => ds.staticYear
+    : (r) => +String(r.year).slice(0, 4);
+  for (const r of stateRows) r.__t = timeOf(r);
+  if (ds.fold) stateRows = foldPalghar(ds, stateRows, metrics);
+  const years = [...new Set(stateRows.map((r) => r.__t))].sort((a, b) => a - b);
   const codes = [...new Set(stateRows.map((r) => r.lgd_district_code))].sort();
   const names = Object.fromEntries(stateRows.map((r) => [r.lgd_district_code, r.district]));
   return { ds, dir, rows: stateRows, cols, years, codes, names, metrics, csvText: text };
 }
 
-function writeDataset(d, dataStamp) {
+function writeDataset(d, dataStamp, allCodes) {
   const outDir = path.join(OUT, d.ds.slug);
   fs.mkdirSync(outDir, { recursive: true });
   const yi = new Map(d.years.map((y, i) => [y, i]));
@@ -141,13 +167,14 @@ function writeDataset(d, dataStamp) {
 
   for (const m of d.metrics) {
     const isCat = m.breaks === 'categorical';
-    const values = Object.fromEntries(d.codes.map((c) => [c, Array(d.years.length).fill(null)]));
+    // every district on the map gets a row, so a district with no data is an explicit blank
+    const values = Object.fromEntries((allCodes ?? d.codes).map((c) => [c, Array(d.years.length).fill(null)]));
     let nulls = 0;
     for (const r of d.rows) {
       const raw = r[m.id];
       const v = raw === '' || raw == null ? null : isCat ? raw : +raw;
       if (v == null || (!isCat && Number.isNaN(v))) { nulls++; continue; }
-      values[r.lgd_district_code][yi.get(+r.year)] = v;
+      values[r.lgd_district_code][yi.get(r.__t)] = v;
     }
     if (isCat) {
       const unknown = [...new Set(Object.values(values).flat().filter((v) => v != null && !m.categories.includes(v)))];
@@ -160,7 +187,7 @@ function writeDataset(d, dataStamp) {
       state_mean: isCat ? null : d.years.map((_, i) => round(mean(d.codes.map((c) => values[c][i])), m.decimals + 1)),
       domain: isCat ? m.categories : [all[0], all[all.length - 1]],
       p05_p95: isCat ? null : [round(quantile(all, 0.05), 3), round(quantile(all, 0.95), 3)],
-      source: `${d.ds.source}, ${d.years[0]}–${d.years[d.years.length - 1]}. District indices computed by Bharatnomy.`,
+      source: `${d.ds.source}, ${d.ds.periodLabel ?? (d.years.length > 1 ? `${d.years[0]}–${d.years[d.years.length - 1]}` : d.years[0])}. ${d.ds.computed ?? ''}`.trim(),
       updated: dataStamp.date,
     };
     const f = path.join(outDir, `${m.id}.json`);
@@ -170,6 +197,8 @@ function writeDataset(d, dataStamp) {
   }
 
   // Downloads: original CSV, README, full JSON (array of row objects).
+  // Datasets with downloads: false get theirs from the catalog step (originals).
+  if (d.ds.downloads === false) return { report, files };
   fs.writeFileSync(path.join(outDir, `${d.ds.folder}.csv`), d.csvText);
   fs.copyFileSync(path.join(d.dir, 'README.md'), path.join(outDir, 'README.md'));
   const typed = d.rows.map((r) => Object.fromEntries(d.cols.map((c) => {
@@ -181,6 +210,55 @@ function writeDataset(d, dataStamp) {
   // Per-district rows for the Atlas "download this district" button are cut
   // client-side from the full CSV, so no extra files here.
   return { report, files };
+}
+
+// --------------------------------------------- 3b. catalog (Datasets page)
+// Every dataset folder under states/<state>/<lens>/ : copy its CSV, JSON and
+// README.md to public/data/<slug>/, zip the three, and describe it for the page.
+// Temperature and rainfall already have their files from writeDataset (typed JSON).
+const ZIP_TIME = new Date('2026-01-01T00:00:00Z');   // fixed, so an unchanged zip stays byte-identical
+function readmeField(md, label) { return md.match(new RegExp(`^- \\*\\*${label}:\\*\\*\\s*(.+)$`, 'm'))?.[1]?.trim() ?? null; }
+function buildCatalog(repoDir) {
+  const stateDir = path.join(repoDir, 'states', STATE.slug);
+  const found = new Map();
+  for (const lens of fs.readdirSync(stateDir)) {
+    const ld = path.join(stateDir, lens);
+    if (!fs.statSync(ld).isDirectory()) continue;
+    for (const f of fs.readdirSync(ld)) if (fs.existsSync(path.join(ld, f, 'README.md'))) found.set(f, { lens, dir: path.join(ld, f) });
+  }
+  const unlisted = [...found.keys()].filter((f) => !CATALOG.some((c) => c.folder === f) && !CATALOG_EXCLUDED.includes(f));
+  if (unlisted.length) fail(`datasets in the repo but not in CATALOG (src/config/data.mjs; or add to CATALOG_EXCLUDED): ${unlisted.join(', ')}`);
+  return CATALOG.map((c) => {
+    const hit = found.get(c.folder);
+    if (!hit) fail(`${c.slug}: folder ${c.folder} not found under states/${STATE.slug}/`);
+    const outDir = path.join(OUT, c.slug);
+    fs.mkdirSync(outDir, { recursive: true });
+    const names = [`${c.folder}.csv`, `${c.folder}.json`, 'README.md'];
+    for (const n of names) {
+      const src = path.join(hit.dir, n);
+      if (!fs.existsSync(src)) fail(`${c.slug}: ${n} missing in ${c.folder}`);
+      if (!fs.existsSync(path.join(outDir, n))) fs.copyFileSync(src, path.join(outDir, n));
+    }
+    const zip = zipSync(Object.fromEntries(names.map((n) => [`${c.folder}/${n}`, [fs.readFileSync(path.join(outDir, n)), { mtime: ZIP_TIME }]])), { level: 9 });
+    fs.writeFileSync(path.join(outDir, `${c.folder}.zip`), zip);
+    const md = fs.readFileSync(path.join(outDir, 'README.md'), 'utf8');
+    const rows = csvParse(fs.readFileSync(path.join(outDir, `${c.folder}.csv`), 'utf8'));
+    const intro = md.split('\n').slice(1).join('\n').trim().split(/\n\s*\n/)[0].trim();
+    const kb = (n) => Math.max(1, Math.round(fs.statSync(path.join(outDir, n)).size / 1024));
+    return {
+      ...c,
+      lens: LENS_FOLDERS[hit.lens] ?? hit.lens,
+      path: `states/${STATE.slug}/${hit.lens}/${c.folder}`,
+      summary: c.summary ?? intro,
+      period: readmeField(md, 'Period'),
+      source: (readmeField(md, 'Data') ?? '').replace(/\*/g, ''),
+      source_url: (readmeField(md, 'Link') ?? '').match(/https?:\/\/[^\s);]+/)?.[0] ?? null,
+      downloaded: readmeField(md, 'Downloaded'),
+      rows: rows.length, columns: rows.columns.length, column_names: rows.columns,
+      districts: new Set(rows.map((r) => r.lgd_district_code).filter(Boolean)).size,
+      csv_kb: kb(`${c.folder}.csv`), json_kb: kb(`${c.folder}.json`), zip_kb: kb(`${c.folder}.zip`),
+    };
+  });
 }
 
 // ------------------------------------------------- decade frames (home peak)
@@ -275,12 +353,13 @@ const loaded = DATASETS.map((ds) => loadDataset(repo.dir, ds));
 const allCodes = new Set(loaded.flatMap((d) => d.codes));
 const geo = buildBoundaries(repo.dir, allCodes);
 const india = buildIndia();
-const written = loaded.map((d) => writeDataset(d, stamp));
+const written = loaded.map((d) => writeDataset(d, stamp, geo.districts.map((x) => x.lgd)));
 const temp = loaded.find((d) => d.ds.slug === 'temperature');
 const rain = loaded.find((d) => d.ds.slug === 'rainfall');
 const frames = decadeFrames(temp, 'days_tmax_above_p90');
 fs.writeFileSync(path.join(OUT, 'temperature', 'decades_days_tmax_above_p90.json'), JSON.stringify(frames));
 const { stats, ticker } = buildStats(temp, rain, frames, geo.districts, stamp);
+const catalog = buildCatalog(repo.dir);   // copies the downloads the next step measures
 const datasetsMeta = loaded.map((d) => ({
   ...d.ds,
   rows: d.rows.length, districts: d.codes.length, columns: d.cols.length,
@@ -291,7 +370,7 @@ const datasetsMeta = loaded.map((d) => ({
 }));
 stats.states_mapped = STATES_MAPPED.map((s) => s.name);
 stats.india_boundaries = { states_2011: india.states, commit: india.sha.slice(0, 7) };
-fs.writeFileSync(path.join(OUT, 'stats.json'), JSON.stringify({ ...stats, ticker, datasets: datasetsMeta }, null, 2));
+fs.writeFileSync(path.join(OUT, 'stats.json'), JSON.stringify({ ...stats, ticker, datasets: datasetsMeta, catalog }, null, 2));
 
 // -------------------------------------------------------------- 6. summary
 log(`\nBharatnomy data build  (${repo.via})`);
@@ -307,6 +386,9 @@ for (const d of loaded) {
   for (const r of w.report) log(`  ${r.metric.padEnd(34)} ${String(r.nulls).padStart(5)} ${r.kb.padStart(6)}`);
   log('');
 }
+log(`CATALOG  ${catalog.length} datasets`);
+for (const c of catalog) log(`  ${c.code.padEnd(16)} ${c.slug.padEnd(22)} rows ${String(c.rows).padStart(5)} · cols ${String(c.columns).padStart(3)} · districts ${String(c.districts).padStart(2)} · zip ${c.zip_kb} KB${c.featured ? ' · featured' : ''}`);
+log('');
 log(`BOUNDARIES  ${BOUNDARIES_PATH}`);
 log(`  ${geo.districts.length} district shapes joined on lgd_district_code, 0 join failures`);
 if (geo.nullGeom.length) log(`  dropped features with no geometry: ${geo.nullGeom.join(', ')} (data uses 2011 boundaries; Thane includes Palghar)`);
