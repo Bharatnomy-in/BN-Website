@@ -10,6 +10,7 @@ import '@fontsource/geist/500.css';
 import '@fontsource/geist/600.css';
 import '@fontsource/geist-mono/400.css';
 import '@fontsource/geist-mono/500.css';
+import aqiFile from '../data/aqi_days_above_100_pct.json';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -947,22 +948,148 @@ const highlighter = (text: string, seed = 'hl') => {
 const indexCard = (body: string, o: any = {}) => { const seed = o.seed ?? o.title ?? 'card', tiltDeg = tilt(seed, o.max ?? 0.8), Tag = o.as ?? 'article', H = o.titleTag ?? 'h3'; return `<${Tag} class="card${o.class ? ' ' + escapeHtml(o.class) : ''}" data-tone="${escapeHtml(o.tone ?? '')}" style="--tilt:${tiltDeg}deg">${o.tape ? '<span class="tape tape--card" aria-hidden="true"></span>' : ''}${o.title ? `<${H} class="display card-title">${escapeHtml(o.title)}</${H}>` : ''}${o.meta ? `<p class="label card-meta">${escapeHtml(o.meta)}</p>` : ''}<div class="card-body">${body}</div></${Tag}>`; };
 const lensTab = (o: any) => { const roman = ['I','II','III','IV','V'][o.n - 1]; const first = o.name.split(' ')[0].replace(/&$/, ''); return `<article class="lens lens--${o.lens}${o.class ? ' ' + o.class : ''}" style="--tab-offset:${(o.n - 1) * 19}%"><div class="lens-tab"><span class="label">${roman}</span><span class="lens-tab-name">${escapeHtml(first)}</span></div><div class="lens-page">${sticker(o.status, { tone: o.n === 1 ? o.lens : 'paper', seed: `lens-${o.n}`, class: 'lens-status' })}<h3 class="display t-l lens-name">${escapeHtml(o.name)}</h3><p class="lens-line">${escapeHtml(o.line)}</p><ul class="lens-focus label">${o.focus.map((f: string) => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div></article>`; };
 const folio = (o: any) => `<p class="folio label${o.sticky ? ' folio--sticky' : ''}${o.class ? ' ' + o.class : ''}"><span>${escapeHtml(o.code)}</span>${o.chapter ? `<span class="folio-sep" aria-hidden="true">·</span><span>CH. ${escapeHtml(o.chapter)}</span>` : ''}<span class="folio-sep" aria-hidden="true">·</span><span>${escapeHtml(o.title)}</span></p>`;
-const legend = (o: any) => { const gaps = [12,8,5.5,3.6,2.5]; return `<figure class="legend${o.class ? ' ' + o.class : ''}" style="--tilt:${tilt(o.seed ?? o.title, 0)}deg"><figcaption class="label legend-title">${escapeHtml(o.title)}</figcaption>${o.hachure ? `<div class="legend-hatch"><svg viewBox="0 0 150 22" width="150" height="22" aria-hidden="true">${gaps.map((g,i)=>`<svg x="${i*30}" y="0" width="28" height="22" viewBox="0 0 28 22">${Array.from({length:Math.ceil(50/g)+1},(_,k)=>`<line x1="${k*g-20}" y1="22" x2="${k*g}" y2="0" stroke="currentColor" stroke-width="0.7"/>`).join('')}<rect x="0.5" y="0.5" width="27" height="21" fill="none" stroke="currentColor" stroke-width="0.75"/></svg>`).join('')}</svg><p class="label"><span>SPARSE = FEW HOT DAYS</span><span>DENSE = MANY</span></p>${o.range ? `<p class="mono legend-range">${escapeHtml(o.range)}</p>` : ''}</div>` : `<ul class="legend-list">${(o.entries ?? []).map((e:any)=>`<li><span class="legend-swatch" style="background:${escapeHtml(e.color)}"></span><span class="mono">${escapeHtml(e.label)}</span></li>`).join('')}${o.nodata ? '<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">no data</span></li>' : ''}</ul>`}</figure>`; };
+const legend = (o: any) => { const gaps = [12,8,5.5,3.6,2.5]; return `<figure class="legend${o.class ? ' ' + o.class : ''}" style="--tilt:${tilt(o.seed ?? o.title, 0)}deg"><figcaption class="label legend-title">${escapeHtml(o.title)}</figcaption>${o.hachure ? `<div class="legend-hatch"><svg viewBox="0 0 150 22" width="150" height="22" aria-hidden="true">${gaps.map((g,i)=>`<svg x="${i*30}" y="0" width="28" height="22" viewBox="0 0 28 22">${Array.from({length:Math.ceil(50/g)+1},(_,k)=>`<line x1="${k*g-20}" y1="22" x2="${k*g}" y2="0" stroke="currentColor" stroke-width="0.7"/>`).join('')}<rect x="0.5" y="0.5" width="27" height="21" fill="none" stroke="currentColor" stroke-width="0.75"/></svg>`).join('')}</svg><p class="label"><span>SPARSE = FEW HOT DAYS</span><span>DENSE = MANY</span></p>${o.range ? `<p class="mono legend-range">${escapeHtml(o.range)}</p>` : ''}</div>` : `<ul class="legend-list">${(o.entries ?? []).map((e:any)=>`<li><span class="legend-swatch" style="background:${escapeHtml(e.color)}"></span><span class="mono">${escapeHtml(e.label)}</span></li>`).join('')}${o.nodata ? `<li><span class="legend-swatch legend-swatch--nodata"></span><span class="mono">${escapeHtml(o.nodataLabel || 'no data')}</span></li>` : ''}</ul>`}</figure>`; };
 const trendFigure = (o: any) => `<figure class="trendfig${o.class ? ' ' + o.class : ''}">${o.caption ? `<p class="label trendfig-cap">${escapeHtml(o.caption)}</p>` : ''}<div class="trendfig-plot">${renderTrend(o)}</div><figcaption class="source label">SOURCE: ${escapeHtml(o.source)}${o.href ? ` · <a href="${escapeHtml(o.href)}">OPEN IN ATLAS</a>` : ''}</figcaption></figure>`;
 const specimenTag = (o: any) => { const d=o.dataset, key=o.seed ?? d?.code ?? o.planned ?? 'tag'; const dg=tilt(key,1), drop=Math.round(rng(key+'drop')()*20), H=o.headingTag??'h3'; const basePath=d?u(`/data/${d.slug}/${d.folder}`):''; return `<article class="tag${d?'':' tag--planned'}${o.class?' '+o.class:''}" style="--tilt:${dg}deg; --drop:${drop}px"><span class="tag-string" aria-hidden="true"></span><span class="tag-hole" aria-hidden="true"></span>${d?`<p class="label tag-code">${escapeHtml(d.code)}</p><${H} class="display tag-title"><a href="${u(`/datasets/${d.slug}`)}">${escapeHtml(d.title)}</a></${H}><p class="label tag-cover">${escapeHtml(o.state??'Maharashtra').toUpperCase()} · ${d.districts} DISTRICTS · ${d.first_year}–${d.last_year}</p><dl class="tag-facts label"><div><dt>Columns</dt><dd class="num">${d.columns}</dd></div><div><dt>Rows</dt><dd class="num">${d.rows.toLocaleString('en-IN')}</dd></div><div><dt>Formats</dt><dd>CSV · JSON</dd></div><div><dt>Size</dt><dd class="num">${d.csv_kb} KB CSV</dd></div></dl><p class="tag-dl"><a href="${basePath}.csv" download>CSV</a><a href="${basePath}.json" download>JSON</a><a href="${u(`/datasets/${d.slug}`)}">Dataset page</a></p>`:`<p class="label tag-code">COMING</p><${H} class="display tag-title">${escapeHtml(o.planned)}</${H}>${o.note?`<p class="tag-note">${escapeHtml(o.note)}</p>`:''}`}</article>`; };
 const sketchMap = (o: any) => { const fc=districtsGeo(); const fitTo=o.extend?{type:'FeatureCollection',features:[...fc.features,{type:'Feature',properties:{},geometry:{type:'MultiPoint',coordinates:[[o.extend[0],o.extend[1]],[o.extend[2],o.extend[3]]]}}]}:stateGeo(); const frame=frameFor(fitTo,o.width??640,o.height??470,o.pad??14); const ds=sketchDistricts(fc,{frame,values:o.values,range:o.range,seedSalt:o.seedSalt??0}); const pts=(o.waypoints??[]).map((w:any,i:number)=>{let x:number,y:number;if(w.lgd){const d=ds.find((q:any)=>q.lgd===w.lgd)!;x=d.x;y=d.y;}else [x,y]=frame.project([w.lon,w.lat]);return {...w,x,y,n:String(i+1).padStart(2,'0'),ring:roughCircle(x,y,22,900+i)};}); const route=pts.length>1?'M'+pts.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L'):''; return `<svg class="sketch${o.colors?' sketch--color':''}${o.class?' '+o.class:''}" viewBox="0 0 ${o.width??640} ${o.height??470}" role="img" aria-label="${escapeHtml(o.title)}">${o.desc?`<desc>${escapeHtml(o.desc)}</desc>`:''}<g class="sketch-districts">${ds.map((d:any)=>`<g class="sk-d${d.lgd===o.selected?' is-selected':''}" data-lgd="${d.lgd}" data-name="${escapeHtml(d.name)}"><path class="sk-hit" d="${d.plain}"${o.colors?.[d.lgd]?` style="fill:${o.colors[d.lgd]}"`:''}/>${d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:''}<path class="sk-line" d="${d.outline.join(' ')}"/><title>${escapeHtml(d.name)}${o.values?`: ${o.values[d.lgd]==null?'no data':fmt(o.values[d.lgd],0)}${o.unit?' '+o.unit:''}`:''}</title></g>`).join('')}</g>${route?`<path class="wp-route" d="${route}"/>`:''}${pts.map(p=>`<g class="wp" transform-origin="${p.x} ${p.y}"><circle cx="${p.x}" cy="${p.y}" r="11" class="wp-fill"/><path d="${p.ring}" class="wp-ring"/><text x="${p.x}" y="${p.y+3.5}" text-anchor="middle" class="wp-n">${p.n}</text><text x="${p.x+16}" y="${p.y+4}" class="wp-label">${escapeHtml(p.label)}</text></g>`).join('')}</svg>`; };
 const indiaSketch = (o:any={}) => { const width=o.width??620,height=o.height??700,cls=o.class??'',thaneId=o.thaneId??'sk-thane',mhId=o.mhId??'sk-mh';const india=indiaGeo(),frame=frameFor(india,width,height,8),states=sketchOutlines(india,frame,{roughness:.55}),mh=districtsGeo(),uniform=Object.fromEntries(mh.features.map((f:any)=>[String(f.properties.lgd),1])),ds=sketchDistricts(mh,{frame,values:uniform,range:[0,1],gap:[4.2,4.2],roughness:.5,hatchWeight:.5}),thane=ds.find((d:any)=>d.name==='Thane'),mhState=states.find((s:any)=>s.props.mapped),cx=ds.reduce((a:number,d:any)=>a+d.x,0)/ds.length,cy=ds.reduce((a:number,d:any)=>a+d.y,0)/ds.length,ring=roughCircle(cx,cy,22,4242);return `<svg class="india ${cls}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Map of India by state. Maharashtra is inked in with its 35 districts; other states are outlines, not yet mapped."><g class="india-states">${states.filter((s:any)=>!s.props.mapped).map((s:any)=>`<path d="${s.d}"><title>${escapeHtml(s.props.name)}: not yet mapped</title></path>`).join('')}</g><g class="india-mh" id="${mhId}"><g class="india-mh-fill">${ds.map((d:any)=>`<path d="${d.plain}"/>`).join('')}</g><g class="india-mh-hatch">${ds.map((d:any)=>`<path d="${d.hatch.join(' ')}"/>`).join('')}</g><g class="india-mh-lines">${ds.map((d:any)=>`<path class="draw" pathLength="1" d="${d.outline.join(' ')}"${d.name==='Thane'?` id="${thaneId}"`:''}><title>${escapeHtml(d.name)}</title></path>`).join('')}</g>${mhState?`<path class="india-mh-edge" d="${mhState.d}"/>`:''}</g><g class="india-wp" id="sk-mh-pt"><circle cx="${cx}" cy="${cy}" r="11" class="wp-fill"/><path d="${ring}" class="wp-ring"/><text x="${cx}" y="${cy+3.5}" text-anchor="middle" class="wp-n">01</text></g>${thane?`<circle cx="${thane.x}" cy="${thane.y}" r="1" fill="none" id="${thaneId}-pt"/>`:''}</svg>`; };
-const census = (slotHtml: string, o:any={}) => {
-  const width=o.width??640,height=o.height??470,s=stats(),fc=districtsGeo(),frame=frameFor(stateGeo(),width,height,10),df=decadeFrames();
-  const idx=df.decades.map((d:any,i:number)=>({...d,i})).filter((d:any,k:number,all:any[])=>d.complete||k===all.length-1).filter((d:any)=>d.start>=1960);
-  const frames=idx.map((d:any)=>({label:d.complete?d.label:`${d.first}–${d.last} · PARTIAL`,first:d.first,last:d.last,i:d.i,values:Object.fromEntries(Object.entries(df.values).map(([k,v]:any)=>[k,v[d.i]]))}));
-  const all=frames.flatMap((f:any)=>Object.values(f.values) as number[]).filter((v:any)=>v!=null).sort((a:number,b:number)=>a-b),q=(p:number)=>all[Math.round((all.length-1)*p)],range:[number,number]=[q(.05),q(.95)];
-  const outline=sketchDistricts(fc,{frame,roughness:.7}),shaded=frames.map((f:any)=>sketchDistricts(fc,{frame,values:f.values,range,seedSalt:f.first,roughness:.7}));
-  const cls=classify({kind:'warm',breaks:'quantile',values:all,decimals:0,unit:'days'}),colors=Object.fromEntries(outline.map((d:any)=>[d.lgd,frames.map((f:any)=>cls.color(f.values[d.lgd])??'none')]));
-  const iFirst=frames.findIndex((f:any)=>f.label===s.decade_first),iLast=frames.findIndex((f:any)=>f.label===s.decade_last),m=metricFile('temperature','days_tmax_above_p90');
-  const SW=1200,SH=150,pad={l:44,r:16,t:18,b:26},x=scaleLinear().domain([m.years[0],m.years[m.years.length-1]]).range([pad.l,SW-pad.r]),ymax=Math.max(...(m.state_mean as number[])),y=scaleLinear().domain([0,ymax*1.08]).range([SH-pad.b,pad.t]).nice(3),pts=m.years.map((yr:number,i:number)=>[x(yr),y(m.state_mean![i] as number)] as [number,number]),pen=roughLine(pts,1951,.35),decadesTicks=m.years.filter((yr:number)=>yr%10===0),penData={years:m.years,mean:m.state_mean,x0:pad.l,x1:SW-pad.r,y0:y.domain()[0],y1:y.domain()[1],top:pad.t,bottom:SH-pad.b},frameMeta=frames.map((f:any)=>({label:f.label,first:f.first,last:f.last})),tally=Object.fromEntries(outline.map((d:any)=>[d.lgd,{name:d.name,a:frames[iFirst]?.values[d.lgd],b:frames[iLast]?.values[d.lgd]}]));
-  const legendHtml=legend({class:'census-legend',title:'Unusually hot days a year · decade average',entries:cls.legend,seed:'census'});
-  return `<div class="census" data-census data-colors='${JSON.stringify(colors)}' data-frames='${JSON.stringify(frameMeta)}' data-pen='${JSON.stringify(penData)}' data-tally='${JSON.stringify(tally)}' data-labels="${s.decade_first}|${s.decade_last}"><div class="census-map"><p class="census-decade display" aria-live="off" data-decade></p><svg class="sketch census-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Maharashtra's districts shaded by unusually hot days, decade by decade from ${frames[0].label} to ${frames[frames.length-1].label}. Darker colour and denser shading mean more hot days."><g class="census-fill">${outline.map((d:any)=>`<path data-lgd="${d.lgd}" d="${d.plain}"/>`).join('')}</g>${shaded.map((ds:any[],k:number)=>`<g class="census-frame" data-frame="${k}"><g id="cf-${k}">${ds.map((d:any)=>d.hatch.length?`<path class="sk-hatch" d="${d.hatch.join(' ')}"/>`:'').join('')}</g></g>`).join('')}<g class="census-outline" id="census-outline">${outline.map((d:any)=>`<g class="sk-d" data-lgd="${d.lgd}"><path class="sk-hit" d="${d.plain}"/><path class="sk-line" d="${d.outline.join(' ')}"/></g>`).join('')}</g></svg><div class="census-tally label" data-tally-card hidden></div><div class="census-ruler"><label class="label" for="census-slider">Decade</label><input id="census-slider" type="range" min="0" max="${frames.length-1}" step="1" value="0" data-slider aria-valuetext="${escapeHtml(frames[0].label)}"/><ol class="census-ticks label" aria-hidden="true">${frames.map((f:any)=>`<li>${escapeHtml(f.label.replace(' · PARTIAL',''))}</li>`).join('')}</ol></div>${legendHtml}</div><div class="census-lines">${slotHtml}</div><figure class="census-strip"><svg viewBox="0 0 ${SW} ${SH}" preserveAspectRatio="none" role="img" aria-label="Unusually hot days, 35-district average, ${m.years[0]} to ${m.years[m.years.length-1]}."><defs><clipPath id="pen-clip"><rect x="0" y="0" width="${SW}" height="${SH}" data-pen-clip/></clipPath></defs><rect class="strip-band" x="${x(1991)}" y="${pad.t}" width="${x(2020)-x(1991)}" height="${SH-pad.t-pad.b}"/>${y.ticks(3).map((t:number)=>`<g><line class="trend-grid" x1="${pad.l}" x2="${SW-pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="trend-tick" x="${pad.l-8}" y="${y(t)+3}" text-anchor="end">${t}</text></g>`).join('')}<line class="trend-axis" x1="${pad.l}" x2="${SW-pad.r}" y1="${SH-pad.b}" y2="${SH-pad.b}"/>${decadesTicks.map((t:number)=>`<g><line class="trend-axis" x1="${x(t)}" x2="${x(t)}" y1="${SH-pad.b}" y2="${SH-pad.b+5}"/><text class="trend-tick" x="${x(t)}" y="${SH-6}" text-anchor="middle">${t}</text></g>`).join('')}<path class="strip-pen" d="${pen}" clip-path="url(#pen-clip)"/><g class="strip-nib" data-pen-nib><circle r="4"/><line x1="0" y1="-5" x2="7" y2="-16"/></g></svg><figcaption class="label soft">Days a year above the 1991–2020 90th percentile · 35-district average · shaded band = 1991–2020 normal</figcaption></figure></div>`;
+// ===== Ch. III map layers: temperature, rainfall, air quality =====
+// Temperature and rainfall by decade (complete decades from the 1960s, then the
+// partial last one); air quality by year. Every number comes from public/data/
+// (written by `npm run data`) except air quality, which is kept in src/data/
+// because `npm run data` rebuilds public/data/ from scratch.
+const AQI_PATH = 'states/maharashtra/climate-adaptation/ENV_aqi-days-by-category_2015-to-2026_MH_BNY_DIST';
+const AQI_REF = '5ced7f6577ce1abaef9bbc6ce8c41c20de32c687';
+const rainDecades = (): DecadeFrames => {
+  const m = metricFile('rainfall', 'rainfall_jun_sep_departure_pct');
+  const decades: any[] = [];
+  for (let start = Math.floor(m.years[0] / 10) * 10; start <= m.years[m.years.length - 1]; start += 10) {
+    const ys = m.years.filter((y: number) => y >= start && y < start + 10);
+    decades.push({ label: `${start}s`, start, first: ys[0], last: ys[ys.length - 1], years: ys.length, complete: ys.length === 10 });
+  }
+  const values = Object.fromEntries(Object.entries(m.values).map(([c, v]: any) => [c, decades.map((d) => {
+    const xs = m.years.map((y: number, i: number) => (y >= d.first && y <= d.last ? v[i] : null)).filter((x: any) => x != null) as number[];
+    return xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null;
+  })]));
+  return { metric: 'rainfall_jun_sep_departure_pct', decades, values } as any;
+};
+const decadeLayerFrames = (df: any) => df.decades
+  .map((d: any, i: number) => ({ ...d, i }))
+  .filter((d: any, k: number, all: any[]) => (d.complete || k === all.length - 1) && d.start >= 1960)
+  .map((d: any) => ({
+    label: d.complete ? d.label : `${d.first}–${d.last} · PARTIAL`, tick: d.label, first: d.first, last: d.last,
+    values: Object.fromEntries(Object.entries(df.values).map(([k, v]: any) => [k, v[d.i]])),
+  }));
+const flatVals = (frames: any[]) => frames.flatMap((f) => Object.values(f.values) as (number | null)[]).filter((v): v is number => v != null).sort((a, b) => a - b);
+const qAt = (all: number[], p: number) => all[Math.round((all.length - 1) * p)];
+const decTicks = (years: number[]) => years.filter((y) => y % 10 === 0);
+
+const homeLayers = () => {
+  const s = stats();
+  const tf = decadeLayerFrames(decadeFrames()), tAll = flatVals(tf), tm = metricFile('temperature', 'days_tmax_above_p90');
+  const temperature = {
+    id: 'temperature', button: 'Temperature', sliderLabel: 'Decade', frames: tf,
+    scale: classify({ kind: 'warm', breaks: 'quantile', values: tAll, decimals: 0, unit: 'days' } as any),
+    legendTitle: 'Unusually hot days a year · decade average', nodataLabel: '',
+    hatchRange: [qAt(tAll, 0.05), qAt(tAll, 0.95)],
+    pen: { years: tm.years, mean: tm.state_mean, y0: 0, y1: Math.max(...(tm.state_mean as number[])) * 1.08, band: [1991, 2020], zero: false, ticks: decTicks(tm.years),
+      caption: 'Days a year above the 1991–2020 90th percentile · 35-district average · shaded band = 1991–2020 normal',
+      aria: `Unusually hot days, 35-district average, ${tm.years[0]} to ${tm.years[tm.years.length - 1]}.` },
+    tally: { labA: s.decade_first, labB: s.decade_last, iA: tf.findIndex((f: any) => f.label === s.decade_first), iB: tf.findIndex((f: any) => f.label === s.decade_last), unit: 'DAYS', signed: false },
+    mapAria: `Maharashtra's districts shaded by unusually hot days, decade by decade from ${tf[0].label} to ${tf[tf.length - 1].label}. Darker colour and denser shading mean more hot days.`,
+  };
+  const rf = decadeLayerFrames(rainDecades()), rAll = flatVals(rf), rm = metricFile('rainfall', 'rainfall_jun_sep_departure_pct');
+  const rAbs = Math.max(...(rm.state_mean!.filter((v: any) => v != null) as number[]).map(Math.abs)) * 1.1;
+  const rComplete = rf.filter((f: any) => !f.label.includes('PARTIAL'));
+  const rainfall = {
+    id: 'rainfall', button: 'Rainfall', sliderLabel: 'Decade', frames: rf,
+    scale: classify({ kind: 'wetdry', breaks: 'diverging-symmetric', values: rAll, decimals: 1, unit: '%' } as any),
+    legendTitle: 'Monsoon rain vs 1971–2020 normal · decade average', nodataLabel: '',
+    hatchRange: [qAt(rAll, 0.05), qAt(rAll, 0.95)],
+    pen: { years: rm.years, mean: rm.state_mean, y0: -rAbs, y1: rAbs, band: [1971, 2020], zero: true, ticks: decTicks(rm.years),
+      caption: 'June–September rainfall vs each district’s 1971–2020 average, % · 35-district average · shaded band = 1971–2020 normal',
+      aria: `Monsoon rainfall departure from normal, 35-district average, ${rm.years[0]} to ${rm.years[rm.years.length - 1]}.` },
+    tally: { labA: rComplete[0].tick, labB: rComplete[rComplete.length - 1].tick, iA: 0, iB: rf.indexOf(rComplete[rComplete.length - 1]), unit: '%', signed: true },
+    mapAria: `Maharashtra's districts coloured by monsoon rainfall against the 1971 to 2020 normal, decade by decade from ${rf[0].label} to ${rf[rf.length - 1].label}. Brown is drier than normal, teal is wetter. Denser shading means a wetter monsoon.`,
+  };
+  const a: any = aqiFile;
+  const af = a.years.map((y: number, i: number) => ({ label: String(y), tick: String(y), first: y, last: y, values: Object.fromEntries(Object.entries(a.values).map(([k, v]: any) => [k, v[i]])) }));
+  const aAll = flatVals(af), aMax = Math.max(...(a.state_mean.filter((v: any) => v != null) as number[]));
+  const aqi = {
+    id: 'aqi', button: 'Air quality', sliderLabel: 'Year', frames: af,
+    scale: classify({ kind: 'warm', breaks: 'quantile', values: aAll, decimals: 0, unit: '%' } as any),
+    legendTitle: 'Share of monitored days with AQI above 100', nodataLabel: 'no monitor',
+    hatchRange: [qAt(aAll, 0.05), qAt(aAll, 0.95)],
+    pen: { years: a.years, mean: a.state_mean, y0: 0, y1: Math.min(100, aMax * 1.15), band: null, zero: false, ticks: a.years,
+      caption: `Share of reported days with AQI above 100, % · average of monitored districts (${a.monitored[0]} in ${a.years[0]}, ${a.monitored[a.monitored.length - 1]} in ${a.years[a.years.length - 1]})`,
+      aria: `Share of days with AQI above 100, average of monitored districts, ${a.years[0]} to ${a.years[a.years.length - 1]}.` },
+    tally: { labA: String(a.years[0]), labB: String(a.years[a.years.length - 1]), iA: 0, iB: af.length - 1, unit: '% OF DAYS AQI OVER 100', signed: false },
+    mapAria: `Maharashtra's districts coloured by the share of days with AQI above 100, year by year from ${a.years[0]} to ${a.years[a.years.length - 1]}. Districts with no monitor in the CPCB bulletin are hatched grey.`,
+  };
+  return [temperature, rainfall, aqi];
+};
+const layerFacts = (L: any[]) => {
+  const avg = (f: any) => { const v = (Object.values(f.values) as any[]).filter((x) => x != null) as number[]; return v.reduce((s, x) => s + x, 0) / v.length; };
+  const rc = L[1].frames.filter((f: any) => !f.label.includes('PARTIAL')), rFirst = rc[0], rLast = rc[rc.length - 1];
+  const a: any = aqiFile, aLast = L[2].frames[L[2].frames.length - 1];
+  return {
+    rain: { firstLabel: rFirst.tick, lastLabel: rLast.tick, firstAvg: Math.round(avg(rFirst)), lastAvg: Math.round(avg(rLast)),
+      wetterLast: (Object.values(rLast.values) as any[]).filter((v) => v != null && v > 0).length, countLast: (Object.values(rLast.values) as any[]).filter((v) => v != null).length },
+    aqi: { firstYear: a.years[0], lastYear: a.years[a.years.length - 1], years: a.years.length, monitoredFirst: a.monitored[0], monitoredLast: a.monitored[a.monitored.length - 1], lastAvg: Math.round(avg(aLast)) },
+  };
+};
+
+// The hint: a hand-drawn arrow at the layer buttons, shown on the first scroll steps of the act
+const mapHint = () => `<div class="map-hint" data-map-hint aria-hidden="true"><span class="map-hint-text">Switch layers to compare rainfall and air quality</span><svg class="map-hint-arrow" viewBox="0 0 96 70" width="96" height="70"><path class="map-hint-shaft" pathLength="1" d="M6,62 C18,60 34,54 46,42 C58,30 66,20 78,9"/><path class="map-hint-head" pathLength="1" d="M64,8.5 C69,8 74,7.6 79.5,7.2 C78.6,12 78,16.6 77.4,21.5"/></svg></div>`;
+
+const census = (slots: Record<string, string>, o: any = {}) => {
+  const width = o.width ?? 640, height = o.height ?? 470, fc = districtsGeo(), frame = frameFor(stateGeo(), width, height, 10), layers = homeLayers();
+  const PAPER = '#FBFBF8';
+  const outline = sketchDistricts(fc, { frame, roughness: 0.7 });
+  const SW = 1200, SH = 150, pad = { l: 44, r: 16, t: 18, b: 26 };
+  const built = layers.map((L: any, li: number) => {
+    const shaded = L.frames.map((f: any) => sketchDistricts(fc, { frame, values: f.values, range: L.hatchRange, seedSalt: f.first + li * 7, roughness: 0.7 }));
+    const colors = Object.fromEntries(outline.map((d: any) => [d.lgd, L.frames.map((f: any) => L.scale.color(f.values[d.lgd]) ?? PAPER)]));
+    const nodata = L.nodataLabel ? Object.fromEntries(outline.map((d: any) => [d.lgd, L.frames.map((f: any) => (f.values[d.lgd] == null ? 1 : 0))])) : null;
+    const p = L.pen;
+    const x = scaleLinear().domain([p.years[0], p.years[p.years.length - 1]]).range([pad.l, SW - pad.r]);
+    const y = scaleLinear().domain([p.y0, p.y1]).range([SH - pad.b, pad.t]).nice(3);
+    const pen = roughLine(p.years.map((yr: number, i: number) => [x(yr), y(p.mean[i] ?? 0)] as [number, number]), 1951 + li, 0.35);
+    const tally = Object.fromEntries(outline.map((d: any) => [d.lgd, { name: d.name, a: L.frames[L.tally.iA]?.values[d.lgd] ?? null, b: L.frames[L.tally.iB]?.values[d.lgd] ?? null }]));
+    const client = {
+      id: L.id, sliderLabel: L.sliderLabel, aria: L.mapAria,
+      frames: L.frames.map((f: any) => ({ label: f.label, first: f.first, last: f.last })),
+      colors, nodata, tally, labA: L.tally.labA, labB: L.tally.labB, unit: L.tally.unit, signed: L.tally.signed,
+      pen: { years: p.years, mean: p.mean, x0: pad.l, x1: SW - pad.r, y0: y.domain()[0], y1: y.domain()[1], top: pad.t, bottom: SH - pad.b },
+    };
+    return { L, shaded, x, y, pen, client };
+  });
+  const first = built[0];
+  const hid = (li: number) => (li !== 0 ? ' hidden' : '');
+  const strip = (b: any, li: number) => {
+    const { L, x, y } = b, P = L.pen;
+    const band = P.band ? `<rect class="strip-band" x="${x(Math.max(P.band[0], P.years[0]))}" y="${pad.t}" width="${x(P.band[1]) - x(Math.max(P.band[0], P.years[0]))}" height="${SH - pad.t - pad.b}"/>` : '';
+    const grid = y.ticks(3).map((t: number) => `<g><line class="trend-grid" x1="${pad.l}" x2="${SW - pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="trend-tick" x="${pad.l - 8}" y="${y(t) + 3}" text-anchor="end">${t > 0 && P.zero ? `+${t}` : t}</text></g>`).join('');
+    const zero = P.zero ? `<line class="trend-axis" x1="${pad.l}" x2="${SW - pad.r}" y1="${y(0)}" y2="${y(0)}"/>` : '';
+    const xt = P.ticks.map((t: number) => `<g><line class="trend-axis" x1="${x(t)}" x2="${x(t)}" y1="${SH - pad.b}" y2="${SH - pad.b + 5}"/><text class="trend-tick" x="${x(t)}" y="${SH - 6}" text-anchor="middle">${t}</text></g>`).join('');
+    return `<div class="strip-layer" data-layer-pen="${L.id}"${hid(li)}><svg viewBox="0 0 ${SW} ${SH}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(P.aria)}"><defs><clipPath id="pen-clip-${L.id}"><rect x="0" y="0" width="${SW}" height="${SH}" data-pen-clip/></clipPath></defs>${band}${grid}${zero}<line class="trend-axis" x1="${pad.l}" x2="${SW - pad.r}" y1="${SH - pad.b}" y2="${SH - pad.b}"/>${xt}<path class="strip-pen" d="${b.pen}" clip-path="url(#pen-clip-${L.id})"/><g class="strip-nib" data-pen-nib><circle r="4"/><line x1="0" y1="-5" x2="7" y2="-16"/></g></svg><figcaption class="label soft">${escapeHtml(P.caption)}</figcaption><p class="source label census-src">${slots[`src-${L.id}`] ?? ''}</p></div>`;
+  };
+  return `<div class="census" data-census data-layers='${JSON.stringify(built.map((b: any) => b.client)).replace(/'/g, '&#39;')}'>`
+    + `<div class="census-map">`
+    + `<div class="census-controls"><p class="census-decade display" aria-live="off" data-decade></p><div class="layer-wrap"><div class="layer-switch" role="group" aria-label="Map layer">${layers.map((L: any, i: number) => `<button type="button" class="layer-btn label" data-layer-btn="${L.id}" aria-pressed="${i === 0}">${escapeHtml(L.button)}</button>`).join('')}</div>${mapHint()}</div></div>`
+    + `<svg class="sketch census-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMid meet" role="img" aria-label="${escapeHtml(first.L.mapAria)}" data-map-svg><defs><pattern id="census-nodata" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#4C535C" stroke-width="0.8" opacity="0.55"/></pattern></defs>`
+    + `<g class="census-fill">${outline.map((d: any) => `<path data-lgd="${d.lgd}" d="${d.plain}"/>`).join('')}</g>`
+    + `<g class="census-nodata">${outline.map((d: any) => `<path data-lgd="${d.lgd}" d="${d.plain}" fill="url(#census-nodata)"/>`).join('')}</g>`
+    + built.map((b: any, li: number) => `<g class="census-layer" data-layer="${b.L.id}"${hid(li)}>${b.shaded.map((ds: any[], k: number) => `<g class="census-frame" data-frame="${k}">${ds.map((d: any) => (d.hatch.length ? `<path class="sk-hatch" d="${d.hatch.join(' ')}"/>` : '')).join('')}</g>`).join('')}</g>`).join('')
+    + `<g class="census-outline" id="census-outline">${outline.map((d: any) => `<g class="sk-d" data-lgd="${d.lgd}"><path class="sk-hit" d="${d.plain}"/><path class="sk-line" d="${d.outline.join(' ')}"/></g>`).join('')}</g></svg>`
+    + `<div class="census-tally label" data-tally-card hidden></div>`
+    + `<div class="census-ruler"><label class="label" for="census-slider" data-slider-label>${escapeHtml(first.L.sliderLabel)}</label><input id="census-slider" type="range" min="0" max="${first.L.frames.length - 1}" step="1" value="0" data-slider aria-valuetext="${escapeHtml(first.L.frames[0].label)}"/>`
+    + built.map((b: any, li: number) => `<ol class="census-ticks label" aria-hidden="true" data-layer-ticks="${b.L.id}"${hid(li)}>${b.L.frames.map((f: any) => `<li>${escapeHtml(b.L.id === 'aqi' ? `’${f.tick.slice(2)}` : f.tick)}</li>`).join('')}</ol>`).join('') + `</div>`
+    + `<div class="census-legends">${built.map((b: any, li: number) => `<div data-layer-legend="${b.L.id}"${hid(li)}>${legend({ class: 'census-legend', title: b.L.legendTitle, entries: b.L.scale.legend, nodata: !!b.L.nodataLabel, nodataLabel: b.L.nodataLabel, seed: `census-${b.L.id}` })}</div>`).join('')}</div>`
+    + `</div>`
+    + `<div class="census-lines">${layers.map((L: any, li: number) => `<div data-layer-lines="${L.id}"${hid(li)}>${slots[L.id] ?? ''}</div>`).join('')}${slots.common ?? ''}</div>`
+    + `<figure class="census-strip">${built.map(strip).join('')}</figure>`
+    + `</div>`;
 };
 const pageStats = stats();
 // Home (BN-000): chaptered editorial with its scroll interactions contained in this page.
@@ -987,16 +1114,36 @@ const span = s.temp_year_span;
 const pageTitle = "Bharatnomy";
 const pageDescription = "Bharatnomy is an independent research firm studying India's economy layer by layer, state by state, traced to primary data.";
 
-const censusSlotHtml = [
+const L3 = homeLayers();
+const F = layerFacts(L3);
+const atK = (n: number) => (k: number) => +(P0 + (k / n) * (P1 - P0) + 0.01).toFixed(3);
+const nR = L3[1].frames.length, atR = atK(nR);
+const kRLast = L3[1].frames.findIndex((f: any) => f.tick === F.rain.lastLabel);
+const nA = L3[2].frames.length, atA = atK(nA);
+const sgn = (v: number) => (v > 0 ? `+${v}` : v < 0 ? `−${Math.abs(v)}` : '0');
+const rainSpan = s.rain_last_year - s.rain_first_year + 1;
+const censusSlots: Record<string, string> = {
+  temperature: [
   `<p class="census-line" data-sc-cue="${at(0)} 1 0.03 0.005">In the ${escapeHtml(s.decade_first)}, the average district had <strong><span class="cnt" data-sc-count="0 ${s.p90_days_first}" data-sc-count-at="${at(0)} ${at(0)+0.06}">${s.p90_days_first}</span><span class="cnt-static">${s.p90_days_first}</span> days</strong> a year hotter than its own 1991 to 2020 normal for that time of year.</p>`,
   `<p class="census-line" data-sc-cue="${at(kLast)} 1 0.03 0.005">By the ${escapeHtml(s.decade_last)}, it had <strong><span class="cnt" data-sc-count="0 ${s.p90_days_last}" data-sc-count-at="${at(kLast)} ${at(kLast)+0.06}">${s.p90_days_last}</span><span class="cnt-static">${s.p90_days_last}</span></strong>.</p>`,
   darkestIsChange
     ? `<p class="census-line" data-sc-cue="${at(n-1)} 1 0.03 0.005">The darkest district on this map, ${escapeHtml(s.hottest_change_district)}, gained <strong><span class="cnt" data-sc-count="0 ${s.hottest_change_days}" data-sc-count-at="${at(n-1)} ${at(n-1)+0.06}">${s.hottest_change_days}</span><span class="cnt-static">${s.hottest_change_days}</span></strong> such days a year.</p>`
     : `<p class="census-line" data-sc-cue="${at(n-1)} 1 0.03 0.005">The biggest gain was in ${escapeHtml(s.hottest_change_district)}: <strong>${s.hottest_change_days}</strong> more such days a year.</p>`,
-  `<p class="census-close" data-sc-cue="0.9 1 0.03 0.005">Every line of shading is a number you can download.</p>`,
-  `<aside class="mnote census-aside"><span class="label mnote-label">Why this measure</span>Why this measure and not "heat wave days"? A 1-degree grid cell is about 110 km wide, so it smooths out the hottest afternoons. Counting days above each district's own 90th percentile does not depend on absolute thresholds, so it is the fairer way to compare change over time.</aside>`,
-  `<p class="source label census-source">SOURCE: IMD GRIDDED DAILY TEMPERATURE (1° GRID), ${s.temp_first_year}–${s.temp_last_year} · DISTRICT INDICES COMPUTED BY BHARATNOMY · METRIC: DAYS WITH TMAX ABOVE THE 1991–2020 90TH PERCENTILE · <a href="${u('/datasets/temperature')}">DATASET</a> · <a href="${u('/atlas?dataset=temperature&metric=days_tmax_above_p90&view=decade')}">OPEN IN ATLAS</a></p>`
-].join('');
+  `<aside class="mnote census-aside"><span class="label mnote-label">Why this measure</span>Why this measure and not "heat wave days"? A 1-degree grid cell is about 110 km wide, so it smooths out the hottest afternoons. Counting days above each district's own 90th percentile does not depend on absolute thresholds, so it is the fairer way to compare change over time.</aside>`].join(''),
+  rainfall: [
+    `<p class="census-line" data-sc-cue="${atR(0)} 1 0.03 0.005">In the ${escapeHtml(F.rain.firstLabel)}, the average district's June to September rain ran <strong>${sgn(F.rain.firstAvg)}%</strong> against its own 1971 to 2020 normal.</p>`,
+    `<p class="census-line" data-sc-cue="${atR(kRLast)} 1 0.03 0.005">In the ${escapeHtml(F.rain.lastLabel)}, <strong>${sgn(F.rain.lastAvg)}%</strong>.</p>`,
+    `<p class="census-line" data-sc-cue="${atR(nR - 1)} 1 0.03 0.005">That decade, <strong>${F.rain.wetterLast}</strong> of ${F.rain.countLast} districts had a wetter monsoon than their normal.</p>`,
+  ].join(''),
+  aqi: [
+    `<p class="census-line" data-sc-cue="${atA(0)} 1 0.03 0.005">In ${F.aqi.firstYear}, CPCB's daily air quality bulletin covered cities in <strong>${F.aqi.monitoredFirst}</strong> of Maharashtra's districts.</p>`,
+    `<p class="census-line" data-sc-cue="${atA(nA - 1)} 1 0.03 0.005">By ${F.aqi.lastYear}, <strong>${F.aqi.monitoredLast}</strong>. That year, the average monitored district had AQI above 100 on <strong>${F.aqi.lastAvg}%</strong> of its days.</p>`,
+  ].join(''),
+  common: [`<p class="census-close" data-sc-cue="0.9 1 0.03 0.005">Every line of shading is a number you can download.</p>`].join(''),
+  'src-temperature': `SOURCE: IMD GRIDDED TEMPERATURE, ${s.temp_first_year}–${s.temp_last_year} · <a href="${u('/datasets/temperature')}">DATASET</a> · <a href="${u('/atlas?dataset=temperature&metric=days_tmax_above_p90&view=decade')}">ATLAS</a>`,
+  'src-rainfall': `SOURCE: IMD GRIDDED RAINFALL, ${s.rain_first_year}–${s.rain_last_year} · <a href="${u('/datasets/rainfall')}">DATASET</a> · <a href="${u('/atlas?dataset=rainfall&metric=rainfall_jun_sep_departure_pct&view=decade')}">ATLAS</a>`,
+  'src-aqi': `SOURCE: CPCB DAILY AQI BULLETINS, ${F.aqi.firstYear}–${F.aqi.lastYear}, POOLED BY DISTRICT (MUMBAI IN BOTH MUMBAI DISTRICTS, PALGHAR IN THANE) · <a href="${DATA_REPO}/tree/${AQI_REF}/${AQI_PATH}">DATA</a>`,
+};
 
 ---
 <!doctype html>
@@ -1089,8 +1236,12 @@ const censusSlotHtml = [
   <section class="ch ch-three" data-sc-act="pin" data-sc-span="6" data-chapter={`CH. III · ${span} SUMMERS`} aria-labelledby="h-three">
     <div class="sc-stage census-stage" data-sc-stage>
       <div class="census-wrap">
-        <h2 id="h-three" class="display t-l census-title">{span} summers, shaded by hand.</h2>
-        <Fragment set:html={census(censusSlotHtml)} />
+        <h2 id="h-three" class="display t-l census-title">
+          <span data-layer-title="temperature">{span} summers, shaded by hand.</span>
+          <span data-layer-title="rainfall" hidden>{rainSpan} monsoons, shaded by hand.</span>
+          <span data-layer-title="aqi" hidden>{F.aqi.years} years of air, shaded by hand.</span>
+        </h2>
+        <Fragment set:html={census(censusSlots)} />
       </div>
     </div>
   </section>
@@ -2555,110 +2706,185 @@ ScrollCraft.mount(document.body);
 // Home page runtime: the Chapter III signature move.
 // Reads each act's --sc-p (published by the ScrollCraft engine) and never
 // writes layout properties: opacity, transform and a clip rect only.
-const homeReduce = matchMedia('(prefers-reduced-motion: homeReduce)').matches;
+const homeReduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 /* ------------------------------------------------- the hand-shaded census */
+// Three layers share one pinned act: temperature and rainfall by decade, air
+// quality by year. The buttons swap which layer the scroll position (and the
+// slider) drives.
 const census = document.querySelector('[data-census]');
 const act = census?.closest('[data-sc-act]');
 if (census && act) {
-    const frames = JSON.parse(census.dataset.frames);
-    const pen = JSON.parse(census.dataset.pen);
-    const tally = JSON.parse(census.dataset.tally);
-    const [labA, labB] = census.dataset.labels.split('|');
-    const groups = Array.from(census.querySelectorAll('.census-frame'));
-    const colors = JSON.parse(census.dataset.colors);
+    const layers = JSON.parse(census.dataset.layers);
     const fills = Array.from(census.querySelectorAll('.census-fill path'));
-    const slider = census.querySelector('[data-slider]');
-    let shownK = -2;
-    const label = census.querySelector('[data-decade]');
-    const clip = census.querySelector('[data-pen-clip]');
-    const nib = census.querySelector('[data-pen-nib]');
-    const n = frames.length;
-    const P0 = 0.12, P1 = 0.9; // silence before P0; last frame holds after P1
-    const yr0 = pen.years[0], yrN = pen.years[pen.years.length - 1];
-    const px = (yr) => pen.x0 + ((yr - yr0) / (yrN - yr0)) * (pen.x1 - pen.x0);
-    const py = (v) => pen.bottom - ((v - pen.y0) / (pen.y1 - pen.y0)) * (pen.bottom - pen.top);
-    const meanAt = (yr) => {
-        const i = Math.max(0, Math.min(pen.years.length - 1, yr - yr0));
-        const lo = Math.floor(i), hi = Math.min(pen.years.length - 1, lo + 1), t = i - lo;
-        return pen.mean[lo] * (1 - t) + pen.mean[hi] * t;
+    const ndPaths = Array.from(census.querySelectorAll('.census-nodata path'));
+    const rgbCache = new Map();
+    const toRgb = (h) => { let v = rgbCache.get(h); if (!v) { v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)); rgbCache.set(h, v); } return v; };
+    const mix = (a, b, t) => {
+        if (t <= 0 || a === b) return a;
+        if (t >= 1) return b;
+        const A = toRgb(a), B = toRgb(b);
+        return `rgb(${Math.round(A[0] + (B[0] - A[0]) * t)},${Math.round(A[1] + (B[1] - A[1]) * t)},${Math.round(A[2] + (B[2] - A[2]) * t)})`;
     };
     const clamp = (v) => Math.max(0, Math.min(1, v));
-    let last = -1;
-    const render = (p) => {
-        if (Math.abs(p - last) < 0.0005)
-            return;
-        last = p;
-        const pos = clamp((p - P0) / (P1 - P0)) * n; // 0..n
-        groups.forEach((g, i) => {
-            const fadeIn = clamp((pos - i) * 4);
-            const fadeOut = i < n - 1 ? clamp((i + 1.25 - pos) * 4) : 1;
-            g.style.opacity = String(Math.min(fadeIn, fadeOut));
-        });
-        const k = Math.min(n - 1, Math.floor(pos));
-        const txt = pos < 0.02 ? '' : frames[k].label;
-        if (label.textContent !== txt)
-            label.textContent = txt;
-        // colour follows the frame on show (fill transition in CSS); silence = unfilled
-        const ck = pos < 0.02 ? -1 : k;
-        if (ck !== shownK) {
-            shownK = ck;
-            fills.forEach((f) => { f.style.fill = ck < 0 ? 'transparent' : colors[f.dataset.lgd][ck]; });
-            if (ck >= 0 && document.activeElement !== slider)
-                slider.value = String(ck);
-            slider.setAttribute('aria-valuetext', ck < 0 ? frames[0].label : frames[ck].label);
-        }
-        // pen reaches the end of the decade on show, easing over each step
-        const prevEnd = k === 0 ? yr0 : frames[k - 1].last;
-        const year = pos < 0.02 ? yr0 : prevEnd + (frames[k].last - prevEnd) * clamp((pos - k) * 4);
-        const x = px(year);
-        clip.setAttribute('width', String(x));
-        nib.setAttribute('transform', `translate(${x.toFixed(1)} ${py(meanAt(year)).toFixed(1)})`);
-        nib.style.opacity = pos < 0.02 ? '0' : '1';
-    };
-    // the slider: drives the same scroll position the frame lives at, so scroll
-    // and slider never disagree. Under reduced motion it sets the frame directly.
-    const posFor = (k) => k + 0.9; // frame k fully shown
-    slider.addEventListener('input', () => {
-        const k = +slider.value;
-        if (homeReduce) {
-            last = -1;
-            render(P0 + (posFor(k) / n) * (P1 - P0));
-            return;
-        }
-        const p = Math.min(0.995, P0 + (posFor(k) / n) * (P1 - P0));
-        const top = act.getBoundingClientRect().top + scrollY;
-        window.scrollTo({ top: Math.round(top + p * (act.offsetHeight - innerHeight)), behavior: 'instant' });
+    // ease with a short hold on each frame, so every frame is readable but the
+    // change between frames is always visible as a slow blend
+    const HOLD = 0.18;
+    const ease = (t) => { const u = clamp((t - HOLD) / (1 - 2 * HOLD)); return u * u * (3 - 2 * u); };
+    const slider = census.querySelector('[data-slider]');
+    const sliderLabel = census.querySelector('[data-slider-label]');
+    const label = census.querySelector('[data-decade]');
+    const mapSvg = census.querySelector('[data-map-svg]');
+    const buttons = Array.from(census.querySelectorAll('[data-layer-btn]'));
+    const titles = Array.from(document.querySelectorAll('[data-layer-title]'));
+    const swaps = ['data-layer', 'data-layer-ticks', 'data-layer-legend', 'data-layer-lines', 'data-layer-pen'];
+    const P0 = 0.12, P1 = 0.9; // silence before P0; last frame holds after P1
+    const ctx = layers.map((L) => {
+        const layerG = census.querySelector(`.census-layer[data-layer="${L.id}"]`);
+        const penBox = census.querySelector(`[data-layer-pen="${L.id}"]`);
+        const p = L.pen, yr0 = p.years[0], yrN = p.years[p.years.length - 1];
+        return {
+            L,
+            groups: Array.from(layerG.querySelectorAll('.census-frame')),
+            clip: penBox.querySelector('[data-pen-clip]'),
+            nib: penBox.querySelector('[data-pen-nib]'),
+            yr0,
+            px: (yr) => p.x0 + ((yr - yr0) / (yrN - yr0 || 1)) * (p.x1 - p.x0),
+            py: (v) => p.bottom - ((v - p.y0) / (p.y1 - p.y0)) * (p.bottom - p.top),
+            meanAt: (yr) => {
+                const i = Math.max(0, Math.min(p.years.length - 1, yr - yr0));
+                const lo = Math.floor(i), hi = Math.min(p.years.length - 1, lo + 1), t = i - lo;
+                return (p.mean[lo] ?? 0) * (1 - t) + (p.mean[hi] ?? 0) * t;
+            },
+        };
     });
+    let cur = ctx[0], shownK = -2, last = -1, lastP = 0, gliding = false, glideRaf = 0;
+
+    // the hint: a hand-drawn arrow at the layer buttons for the first two
+    // scroll steps of the act (the blank map, then the first two frames). It
+    // goes for good once someone uses the buttons.
+    const hint = census.querySelector('[data-map-hint]');
+    let hintDone = false;
+    const HINT_END = P0 + (2 / layers[0].frames.length) * (P1 - P0);
+    const showHint = (p) => {
+        if (!hint || hintDone) return;
+        hint.classList.toggle('is-on', homeReduce || (p > 0.005 && p < HINT_END));
+    };
+    const dismissHint = () => { if (hint) { hintDone = true; hint.classList.remove('is-on'); } };
+
+    // scroll position maps to a continuous frame index in [0, n-1]: frame k is
+    // fully shown at c = k, and between frames colours, hachure and pen blend
+    const frameAt = (p, n) => clamp((p - P0) / (P1 - P0)) * n - 0.5;
+    const render = (p) => {
+        lastP = p;
+        showHint(p);
+        if (Math.abs(p - last) < 0.0002) return;
+        last = p;
+        const { L, groups, clip, nib } = cur;
+        const frames = L.frames, n = frames.length;
+        const raw = frameAt(p, n);
+        const silent = raw < -0.45;
+        const c = Math.max(0, Math.min(n - 1, raw));
+        const k0 = Math.floor(c), k1 = Math.min(n - 1, k0 + 1);
+        const t = k1 === k0 ? 0 : ease(c - k0);
+        const intro = clamp((raw + 0.5) / 0.5); // first frame fades in from blank paper
+        groups.forEach((g, i) => {
+            const o = silent ? 0 : i === k0 ? (1 - t) * intro : i === k1 ? t * intro : 0;
+            g.style.opacity = o.toFixed(3);
+        });
+        fills.forEach((f) => {
+            const col = L.colors[f.dataset.lgd];
+            f.style.fill = silent ? 'transparent' : intro < 1 ? mix('#FBFBF8', col[0], intro) : mix(col[k0], col[k1], t);
+        });
+        ndPaths.forEach((f) => {
+            const nd = L.nodata?.[f.dataset.lgd];
+            f.style.opacity = !nd || silent ? '0' : String((nd[k0] * (1 - t) + nd[k1] * t) * intro);
+        });
+        const k = t >= 0.5 ? k1 : k0;
+        const txt = silent ? '' : frames[k].label;
+        if (label.textContent !== txt) label.textContent = txt;
+        const sk = silent ? -1 : k;
+        if (sk !== shownK) {
+            shownK = sk;
+            if (sk >= 0 && document.activeElement !== slider && !gliding) slider.value = String(sk);
+            slider.setAttribute('aria-valuetext', sk < 0 ? frames[0].label : frames[sk].label);
+        }
+        const y0 = cur.yr0;
+        const year = silent ? y0 : raw < 0 ? y0 + (frames[0].last - y0) * intro : frames[k0].last + (frames[k1].last - frames[k0].last) * t;
+        const x = cur.px(year);
+        clip.setAttribute('width', String(x));
+        nib.setAttribute('transform', `translate(${x.toFixed(1)} ${cur.py(cur.meanAt(year)).toFixed(1)})`);
+        nib.style.opacity = silent ? '0' : '1';
+    };
+
+    // the slider glides the page to its frame, so scroll and slider never disagree
+    const pFor = (k) => P0 + ((k + 0.5) / cur.L.frames.length) * (P1 - P0);
+    slider.addEventListener('input', () => {
+        dismissHint();
+        const k = +slider.value;
+        if (homeReduce) { last = -1; render(pFor(k)); return; }
+        const p = Math.min(0.995, pFor(k));
+        const top = act.getBoundingClientRect().top + scrollY;
+        const to = Math.round(top + p * (act.offsetHeight - innerHeight));
+        const from = scrollY, dist = to - from, t0 = performance.now();
+        const dur = Math.min(1400, 500 + Math.abs(dist) * 0.25);
+        cancelAnimationFrame(glideRaf);
+        gliding = true;
+        const step = (now) => {
+            const u = clamp((now - t0) / dur), e = u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2;
+            window.scrollTo({ top: Math.round(from + dist * e), behavior: 'instant' });
+            if (u < 1) glideRaf = requestAnimationFrame(step); else gliding = false;
+        };
+        glideRaf = requestAnimationFrame(step);
+    });
+
+    // layer buttons: swap which frames, colours, pen, legend and copy are live
+    const setLayer = (id) => {
+        const next = ctx.find((c) => c.L.id === id);
+        if (!next || next === cur) return;
+        cur = next;
+        for (const attr of swaps) census.querySelectorAll(`[${attr}]`).forEach((el) => {
+            if (el.getAttribute(attr) === id) el.removeAttribute('hidden'); else el.setAttribute('hidden', '');
+        });
+        titles.forEach((t) => { t.hidden = t.dataset.layerTitle !== id; });
+        buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layerBtn === id)));
+        slider.max = String(cur.L.frames.length - 1);
+        sliderLabel.textContent = cur.L.sliderLabel;
+        mapSvg.setAttribute('aria-label', cur.L.aria);
+        shownK = -2; last = -1;
+        render(homeReduce ? 1 : lastP);
+    };
+    buttons.forEach((b) => b.addEventListener('click', () => { dismissHint(); setLayer(b.dataset.layerBtn); }));
+
     if (homeReduce) {
         render(1);
-    }
-    else {
+    } else {
         let on = false, raf = 0;
         const tick = () => {
-            const p = parseFloat(getComputedStyle(act).getPropertyValue('--sc-p')) || 0;
-            render(p);
-            if (on)
-                raf = requestAnimationFrame(tick);
+            render(parseFloat(getComputedStyle(act).getPropertyValue('--sc-p')) || 0);
+            if (on) raf = requestAnimationFrame(tick);
         };
         new IntersectionObserver(([e]) => {
             on = e.isIntersecting;
             cancelAnimationFrame(raf);
-            if (on)
-                raf = requestAnimationFrame(tick);
+            if (on) raf = requestAnimationFrame(tick);
         }).observe(act);
         render(0);
     }
+
     // pointer bonus: a tally card for the hovered district (desktop only)
     const card = census.querySelector('[data-tally-card]');
     const mapBox = census.querySelector('.census-map');
     if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
+        const f = (v) => {
+            if (v == null) return cur.L.id === 'aqi' ? 'no monitor' : 'no data';
+            const r = Math.round(v);
+            return cur.L.signed && r > 0 ? `+${r}` : String(r);
+        };
         census.querySelectorAll('.census-outline .sk-d').forEach((g) => {
             g.addEventListener('pointerenter', () => {
-                const t = tally[g.dataset.lgd];
-                if (!t)
-                    return;
-                const f = (v) => (v == null ? 'no data' : String(Math.round(v)));
-                card.textContent = `${t.name.toUpperCase()} · ${labA} ${f(t.a)} · ${labB} ${f(t.b)} DAYS`;
+                const t = cur.L.tally[g.dataset.lgd];
+                if (!t) return;
+                card.textContent = `${t.name.toUpperCase()} · ${cur.L.labA} ${f(t.a)} · ${cur.L.labB} ${f(t.b)} ${cur.L.unit}`;
                 card.hidden = false;
                 g.classList.add('is-hover');
             });
@@ -3274,7 +3500,7 @@ body.home .btn--primary { color: var(--paper); }
   background-size: var(--grid) var(--grid), var(--grid) var(--grid), 8px 8px, 8px 8px;
   border-top: var(--hair); border-bottom: var(--hair);
 }
-.census-wrap { max-width: var(--page-max); height: 100%; margin-inline: auto; padding: var(--s-6) var(--gutter) var(--s-5); display: grid; grid-template-rows: auto 1fr; gap: var(--s-3); }
+.census-wrap { max-width: var(--page-max); height: 100%; margin-inline: auto; padding: calc(var(--s-6) + 50px) var(--gutter) var(--s-5); /* 50px: the sticky navbar */ display: grid; grid-template-rows: auto 1fr; gap: var(--s-3); }
 .census {
   display: grid; min-height: 0;
   grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
@@ -3282,20 +3508,59 @@ body.home .btn--primary { color: var(--paper); }
   grid-template-areas: "map lines" "strip strip";
   column-gap: var(--s-7); row-gap: var(--s-3);
 }
-.census-map { grid-area: map; position: relative; min-height: 0; display: flex; flex-direction: column; }
-.census-fill path { fill: transparent; stroke: none; transition: fill 520ms ease-in-out; }
+.census-map {
+  grid-area: map; position: relative; min-height: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) 210px; grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "controls controls" "svg legends" "ruler ruler"; column-gap: var(--s-4);
+}
+.census-map > .census-controls { grid-area: controls; }
+.census-map > .census-svg { grid-area: svg; }
+.census-map > .census-ruler { grid-area: ruler; }
+.census-map > .census-legends { grid-area: legends; }
+.census [hidden] { display: none !important; }
+.census-nodata path { opacity: 0; stroke: none; pointer-events: none; }
+.census-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s-2) var(--s-4); min-height: 34px; position: relative; z-index: 2; }
+.layer-wrap { position: relative; }
+.layer-switch { display: inline-flex; border: var(--hair); background: var(--paper-raised); }
+.layer-btn {
+  font: inherit; font-size: 0.66rem; letter-spacing: var(--track-label); text-transform: uppercase;
+  color: var(--ink); background: transparent; border: 0; padding: 7px 11px; cursor: pointer; min-height: 32px;
+}
+.layer-btn + .layer-btn { border-left: var(--hair); }
+.layer-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.layer-btn:hover:not([aria-pressed="true"]) { background: var(--accent-wash); }
+.layer-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.census-legends { display: grid; gap: var(--s-2); align-content: end; justify-items: stretch; min-height: 0; }
+.census-src { margin: 4px 0 0; font-size: 0.6rem; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+/* the hint: a hand-written note and arrow pointing at the layer buttons */
+.map-hint {
+  position: absolute; top: 50%; right: calc(100% + 4px); z-index: 3; pointer-events: none;
+  display: flex; align-items: center; gap: 0; color: var(--accent);
+  opacity: 0; transform: translate(-8px, -50%); transition: opacity 320ms ease, transform 420ms ease;
+}
+.map-hint-text {
+  font-family: var(--f-mono); font-weight: 500; font-size: 0.68rem; letter-spacing: var(--track-label);
+  text-transform: uppercase; line-height: 1.35; width: max-content; max-width: 30ch; text-align: right;
+  margin: 0; padding: 4px 7px; background: var(--paper-raised); border: 1px solid var(--accent);
+}
+.map-hint-arrow { flex: none; overflow: visible; width: 56px; height: 40px; transform: rotate(38deg); }
+.map-hint-arrow path { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.map-hint.is-on { opacity: 1; transform: translate(0, -50%); }
+.map-hint.is-on .map-hint-shaft { transition: stroke-dashoffset 600ms ease-out 120ms; stroke-dashoffset: 0; }
+.map-hint.is-on .map-hint-head { transition: stroke-dashoffset 260ms ease-out 700ms; stroke-dashoffset: 0; }
+.census-fill path { fill: transparent; stroke: none; }
 .ch-three .census-frame .sk-hatch { stroke: var(--ink); opacity: 0.42; stroke-width: 0.55; }
 .census-ruler { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: var(--s-4); margin-top: var(--s-2); max-width: 640px; }
 .census-ruler input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; cursor: pointer; margin: 0; }
 .census-ticks { grid-column: 2; display: flex; justify-content: space-between; list-style: none; margin: 0; padding: 0; font-size: 0.58rem; color: var(--ink-soft); }
 .census-ticks li { width: 0; display: flex; justify-content: center; white-space: nowrap; }
 .census-ticks li:first-child { justify-content: flex-start; } .census-ticks li:last-child { justify-content: flex-end; }
-.census-legend { position: absolute; right: 0; bottom: 104px; max-width: 230px; padding: var(--s-2) var(--s-3); }
+.census-legend { max-width: 240px; padding: var(--s-2) var(--s-3); }
 .census-legend .legend-list .mono { font-size: 0.68rem; }
-.census-svg { width: 100%; flex: 1 1 auto; min-height: 0; max-height: calc(100svh - 380px); }
+.census-svg { width: 100%; height: 100%; min-height: 0; max-height: calc(100svh - 360px); }
 .census-frame { opacity: 0; }
 .census-decade {
-  position: absolute; top: 0; left: 0; margin: 0;
+  margin: 0 auto 0 0; white-space: nowrap;
   font-family: var(--f-mono); font-weight: 500; font-size: clamp(1.2rem, 0.9rem + 1vw, 1.9rem); letter-spacing: 0.02em;
   border-bottom: 2px solid var(--accent); padding-bottom: 2px; min-height: 1.2em;
 }
@@ -3362,17 +3627,31 @@ body.home .btn--primary { color: var(--paper); }
   .title-h1 { font-size: clamp(3rem, 15vw, 5rem); }
   .one-text { padding-top: 0; }
   .one-map { margin-top: var(--s-6); }
-  .census-wrap { padding-top: var(--s-5); }
+  .census-wrap { padding-top: calc(var(--s-5) + 50px); }
   .census { grid-template-columns: 1fr; grid-template-rows: auto auto auto; grid-template-areas: "map" "strip" "lines"; row-gap: var(--s-2); }
-  .census-svg { max-height: 32svh; }
-  .census-legend { position: static; max-width: none; margin-top: var(--s-2); }
+  .census-map { display: flex; flex-direction: column; min-height: auto; }
+  .census-map > * { flex: none; }
+  .census-svg { max-height: 20svh; height: 20svh; }
+  .census-strip figcaption { display: none; }
+  .census-legends { margin-top: var(--s-2); }
+  .census-legend { max-width: none; padding: var(--s-1) var(--s-2); }
+  .census-legends .legend-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.6rem; }
+  .census-controls { justify-content: flex-start; gap: var(--s-2); }
+  .census-decade { order: 3; flex-basis: 100%; font-size: 1.05rem; }
+  .layer-btn { padding: 6px 7px; font-size: 0.58rem; min-height: 30px; letter-spacing: 0.04em; }
+  .census-src { font-size: 0.52rem; }
+  .map-hint { top: calc(100% + 2px); right: auto; left: 34%; flex-direction: row-reverse; align-items: flex-start; transform: translateY(6px); }
+  .map-hint.is-on { transform: none; }
+  .map-hint-arrow { transform: scaleX(-1); width: 64px; height: 50px; }
+  .census-decade { margin-top: 0; }
+  .map-hint-text { margin-top: 32px; margin-left: 2px; margin-right: 0; font-size: 0.6rem; text-align: left; max-width: 30ch; }
   .census-ticks li:nth-child(even) { visibility: hidden; }
   .census-legend .legend-list { grid-template-columns: 1fr 1fr; }
-  .census-strip svg { height: 64px; }
+  .census-strip svg { height: 48px; }
   .census-lines { padding-top: var(--s-2); gap: var(--s-2); }
   .census-line { font-size: 0.95rem; line-height: 1.4; }
   .census-aside, .census-source { display: none; }
-  .census-close { font-size: 1.2rem; }
+  .census-close { display: none; }
   .five-tags { flex-direction: column; align-items: center; }
   .five-string { display: none; }
   .five-tags::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; border-left: 1px dashed var(--ink); }
@@ -3387,6 +3666,7 @@ body.home .btn--primary { color: var(--paper); }
   .census-svg { max-height: 70vh; }
   .census-fill path { transition: none; }
   .census-line, .census-close { opacity: 1 !important; transform: none !important; }
+  .map-hint, .map-hint path { transition: none !important; }
   .cnt { display: none; }
   .cnt-static { display: inline; }
   /* the lens rail becomes an ordinary horizontal scroll region, no held screens */
