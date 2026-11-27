@@ -1003,6 +1003,40 @@ const gr = cat && !isRich ? parseReadme(readme(cat.slug)) : null;
 const zipHref = (c: CatalogEntry) => u(`/data/${c.slug}/${c.folder}.zip`);
 const themes = [...new Set(catalog.map((c) => c.theme))];
 
+// ===== Dataset graph (index page): datasets linked through what they share =====
+// Datasets are the big nodes; themes and source agencies are small hub nodes, like
+// tags in a notes graph. A few hand-picked topic links join datasets that are
+// worth reading together. Every dataset also shares the LGD district code key.
+const AGENCIES: [RegExp, string][] = [
+  [/\(IMD\)/, 'IMD'], [/\(CPCB\)/, 'CPCB'], [/\(CEA\)/, 'CEA'], [/\(FSI\)/, 'FSI'],
+  [/ESMAP/, 'World Bank · ESMAP'], [/FIRMS/, 'NASA FIRMS'], [/\(WRI\)/, 'WRI'], [/Jal Shakti/, 'Jal Shakti'],
+];
+const TOPIC_LINKS: [string, string, string][] = [
+  ['power-stations', 'power-plants', 'Same plants, owner column in both'],
+  ['active-fires', 'forest-cover', 'Fires against the forest they burn'],
+  ['wind-resource', 'power-plants', 'Wind potential against built capacity'],
+  ['solar-resource', 'power-plants', 'Solar potential against built capacity'],
+  ['cyclones', 'rainfall', 'Storms and the rain they bring'],
+  ['rainfall', 'rainfall-variability', 'Monsoon totals and their spread'],
+  ['temperature', 'air-quality', 'Hot, still days and bad air'],
+  ['odf-plus-villages', 'rural-tap-water', 'Sanitation and water, village by village'],
+];
+const THEME_TONE: Record<string, string> = { Climate: 'clm', Energy: 'eng', Environment: 'mac', 'Water & sanitation': 'eqt' };
+const dsGraph = (() => {
+  const nodes: any[] = [], links: any[] = [];
+  const hub = (id: string, label: string, kind: string) => { if (!nodes.some((n) => n.id === id)) nodes.push({ id, label, kind }); return id; };
+  for (const c of catalog) {
+    nodes.push({ id: c.slug, kind: 'ds', label: c.title.replace(/ by district$/i, ''), code: c.code, theme: c.theme, tone: THEME_TONE[c.theme] ?? 'com', period: c.period, href: u(`/datasets/${c.slug}`) });
+    const th = hub(`theme:${c.theme}`, c.theme, 'theme'); nodes.find((n) => n.id === th).tone = THEME_TONE[c.theme] ?? 'com';
+    links.push({ s: c.slug, t: th, kind: 'theme' });
+    const ag = AGENCIES.find(([re]) => re.test(c.source))?.[1] ?? c.source.split(/[,(]/)[0].trim();
+    links.push({ s: c.slug, t: hub(`src:${ag}`, ag, 'src'), kind: 'src' });
+  }
+  const have = new Set(catalog.map((c) => c.slug));
+  for (const [a, b, why] of TOPIC_LINKS) if (have.has(a) && have.has(b)) links.push({ s: a, t: b, kind: 'topic', why });
+  return { nodes, links };
+})();
+
 // Citations in Chicago style (Chicago Manual of Style, 18th ed.): the dataset
 // title in italics and headline-style capitals, version = data commit, date =
 // that commit's date, URL = this site's page for the dataset.
@@ -1168,6 +1202,31 @@ const pageDescription = isIndex
                 <tr class="dsx-empty" data-dsx-empty hidden><td colspan="7">No dataset matches that search. Try a broader word, or <a href="mailto:namaste@bharatnomy.com?subject=Dataset%20request">tell us what you need</a>.</td></tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="sheet dsx-graph-sec" aria-labelledby="dsx-graph-h">
+          <div class="dsx-graph-head">
+            <h2 id="dsx-graph-h" class="display t-m">How the datasets connect</h2>
+            <p class="soft">Each large dot is a dataset; small dots are the themes and agencies they come from. Blue lines join datasets worth reading together. Every one of them also shares the LGD district code, so any two can be joined row for row. Hover to trace a dataset's links, drag to rearrange, click to open it.</p>
+          </div>
+          <div class="dsx-graph" data-dsx-graph>
+            <fieldset class="dsx-graph-keys label">
+              <legend class="visually-hidden">Show links</legend>
+              <label><input type="checkbox" data-gk="topic" checked /> <span class="gk gk--topic"></span>Topic links</label>
+              <label><input type="checkbox" data-gk="theme" checked /> <span class="gk gk--theme"></span>Themes</label>
+              <label><input type="checkbox" data-gk="src" checked /> <span class="gk gk--src"></span>Sources</label>
+              <button type="button" class="dsx-graph-reset" data-graph-reset>Re-settle</button>
+            </fieldset>
+            <svg class="dsx-graph-svg" viewBox="0 0 1200 620" role="img" aria-label={`Network of ${catalog.length} datasets linked by theme, source agency and topic`} data-graph-svg>
+              <g data-graph-links></g>
+              <g data-graph-nodes></g>
+            </svg>
+            <p class="dsx-graph-tip label" data-graph-tip hidden></p>
+            <script type="application/json" data-graph-data set:html={JSON.stringify(dsGraph)} />
+            <ul class="visually-hidden">
+              {dsGraph.links.filter((l) => l.kind === 'topic').map((l) => <li>{dsGraph.nodes.find((n) => n.id === l.s).label} and {dsGraph.nodes.find((n) => n.id === l.t).label}: {l.why}</li>)}
+            </ul>
           </div>
         </section>
 
@@ -1368,6 +1427,127 @@ const pageDescription = isIndex
     </main>
     <Footer stats={pageStats} />
     
+<script is:inline>
+// Dataset graph: a small force layout (repulsion, springs, a pull to the centre),
+// drawn in SVG. Hover or focus a node to light up its neighbours; drag to move.
+(() => {
+  const root = document.querySelector('[data-dsx-graph]');
+  if (!root) return;
+  const NS = 'http://www.w3.org/2000/svg';
+  const data = JSON.parse(root.querySelector('[data-graph-data]').textContent);
+  const svg = root.querySelector('[data-graph-svg]'), gL = svg.querySelector('[data-graph-links]'), gN = svg.querySelector('[data-graph-nodes]');
+  const tip = root.querySelector('[data-graph-tip]');
+  const W = 1200, H = 620, reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const byId = new Map();
+  const R = { ds: 13, theme: 8, src: 5 };
+  data.nodes.forEach((n, i) => {
+    const a = i * 2.39996, r = 40 + 9 * i; // golden-angle spiral start, so every load settles the same way
+    Object.assign(n, { x: W / 2 + r * Math.cos(a), y: H / 2 + r * Math.sin(a) * 0.7, vx: 0, vy: 0, r: R[n.kind], nb: new Set([n.id]) });
+    byId.set(n.id, n);
+  });
+  const links = data.links.map((l) => ({ ...l, a: byId.get(l.s), b: byId.get(l.t) }));
+  links.forEach((l) => { l.a.nb.add(l.b.id); l.b.nb.add(l.a.id); });
+  const on = { topic: true, theme: true, src: true };
+  const REST = { topic: 240, theme: 180, src: 110 }, K = { topic: 0.04, theme: 0.025, src: 0.05 };
+
+  for (const l of links) {
+    l.el = document.createElementNS(NS, 'line');
+    l.el.setAttribute('class', `g-link g-link--${l.kind}`);
+    gL.appendChild(l.el);
+  }
+  for (const n of data.nodes) {
+    const g = document.createElementNS(NS, n.kind === 'ds' ? 'a' : 'g');
+    g.setAttribute('class', `g-node g-node--${n.kind === 'ds' ? 'ds' : 'hub g-node--' + n.kind}${n.tone ? ' g-tone-' + n.tone : ''}`);
+    if (n.kind === 'ds') { g.setAttribute('href', n.href); g.setAttribute('aria-label', `${n.label}, ${n.theme}, ${n.period}`); }
+    const big = n.kind === 'ds' ? `<circle class="g-halo" r="${n.r + 12}"/>` : '';
+    g.innerHTML = `${big}<circle r="${n.r}"/><text x="0" y="${n.r + 15}" text-anchor="middle"></text>`;
+    g.querySelector('text').textContent = n.label;
+    n.el = g; gN.appendChild(g);
+  }
+
+  let alpha = 1;
+  const tick = () => {
+    const ns = data.nodes;
+    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {
+      const p = ns[i], q = ns[j]; let dx = q.x - p.x, dy = q.y - p.y, d2 = Math.max(dx * dx + dy * dy, 400);
+      const f = (p.kind === 'ds' && q.kind === 'ds' ? 40000 : 14000) / d2 * alpha, d = Math.sqrt(d2);
+      dx /= d; dy /= d; p.vx -= dx * f; p.vy -= dy * f; q.vx += dx * f; q.vy += dy * f;
+    }
+    for (const l of links) {
+      if (!on[l.kind]) continue;
+      const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.hypot(dx, dy) || 1, f = (d - REST[l.kind]) * K[l.kind] * alpha;
+      l.a.vx += dx / d * f; l.a.vy += dy / d * f; l.b.vx -= dx / d * f; l.b.vy -= dy / d * f;
+    }
+    for (const n of ns) {
+      n.vx += (W / 2 - n.x) * 0.0008 * alpha; n.vy += (H / 2 - n.y) * 0.005 * alpha;
+      if (n.fixed) { n.vx = n.vy = 0; continue; }
+      n.vx *= 0.82; n.vy *= 0.82;
+      const sp = Math.hypot(n.vx, n.vy); if (sp > 30) { n.vx *= 30 / sp; n.vy *= 30 / sp; }
+      n.x += n.vx; n.y += n.vy;
+      n.x = Math.max(90, Math.min(W - 90, n.x)); n.y = Math.max(40, Math.min(H - 40, n.y));
+    }
+    alpha = Math.max(alpha * 0.985, 0.002);
+  };
+  const draw = () => {
+    for (const l of links) { l.el.setAttribute('x1', l.a.x.toFixed(1)); l.el.setAttribute('y1', l.a.y.toFixed(1)); l.el.setAttribute('x2', l.b.x.toFixed(1)); l.el.setAttribute('y2', l.b.y.toFixed(1)); l.el.style.display = on[l.kind] ? '' : 'none'; }
+    for (const n of data.nodes) n.el.setAttribute('transform', `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
+  };
+  let raf = 0;
+  const run = () => { tick(); draw(); raf = alpha > 0.01 || drag ? requestAnimationFrame(run) : 0; };
+  const heat = (a) => { alpha = Math.max(alpha, a); if (reduce) { for (let i = 0; i < 400; i++) tick(); draw(); } else if (!raf) raf = requestAnimationFrame(run); };
+
+  // Hover / focus: light up a node and its neighbours.
+  const lit = (n) => {
+    root.classList.toggle('is-focus', !!n);
+    for (const m of data.nodes) m.el.classList.toggle('is-lit', !!n && n.nb.has(m.id));
+    for (const l of links) l.el.classList.toggle('is-lit', !!n && (l.a === n || l.b === n));
+    if (!n || n.kind !== 'ds') { tip.hidden = true; return; }
+    const why = links.filter((l) => l.kind === 'topic' && (l.a === n || l.b === n)).map((l) => `↔ ${(l.a === n ? l.b : l.a).label}: ${l.why}`);
+    tip.innerHTML = '';
+    const b = document.createElement('b'); b.textContent = `${n.code} · ${n.period}`; tip.appendChild(b);
+    for (const w of why) { const s = document.createElement('span'); s.textContent = w; s.style.display = 'block'; tip.appendChild(s); }
+    const box = svg.getBoundingClientRect(), rb = root.getBoundingClientRect();
+    tip.style.left = `${box.left - rb.left + n.x / W * box.width}px`;
+    tip.style.top = `${box.top - rb.top + (n.y - n.r) / H * box.height}px`;
+    tip.hidden = false;
+  };
+  data.nodes.forEach((n) => {
+    n.el.addEventListener('pointerenter', () => { if (!drag) lit(n); });
+    n.el.addEventListener('pointerleave', () => { if (!drag) lit(null); });
+    n.el.addEventListener('focus', () => lit(n));
+    n.el.addEventListener('blur', () => lit(null));
+  });
+
+  // Drag: pointer to viewBox coordinates.
+  let drag = null, moved = false;
+  const pt = (e) => { const m = svg.getScreenCTM().inverse(); return { x: (e.clientX * m.a + e.clientY * m.c + m.e), y: (e.clientX * m.b + e.clientY * m.d + m.f) }; };
+  svg.addEventListener('pointerdown', (e) => {
+    const g = e.target.closest('.g-node'); if (!g) return;
+    drag = data.nodes.find((n) => n.el === g); moved = false;
+    drag.fixed = true; svg.setPointerCapture(e.pointerId); svg.classList.add('is-dragging');
+    heat(0.3);
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!drag) return; const p = pt(e);
+    if (Math.hypot(p.x - drag.x, p.y - drag.y) > 3) moved = true;
+    drag.x = p.x; drag.y = p.y; lit(drag); heat(0.3);
+  });
+  const end = () => { if (!drag) return; drag.fixed = false; drag = null; svg.classList.remove('is-dragging'); lit(null); heat(0.1); };
+  svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
+  svg.addEventListener('click', (e) => { if (moved) { e.preventDefault(); moved = false; } }, true);
+
+  root.querySelectorAll('[data-gk]').forEach((cb) => cb.addEventListener('change', () => { on[cb.dataset.gk] = cb.checked; heat(0.6); draw(); }));
+  root.querySelector('[data-graph-reset]').addEventListener('click', () => {
+    data.nodes.forEach((n, i) => { const a = i * 2.39996, r = 40 + 9 * i; n.x = W / 2 + r * Math.cos(a); n.y = H / 2 + r * Math.sin(a) * 0.7; n.vx = n.vy = 0; });
+    heat(1);
+  });
+
+  // Settle off-screen first, then animate in when the graph scrolls into view.
+  for (let i = 0; i < (reduce ? 400 : 60); i++) tick();
+  draw();
+  if (!reduce) new IntersectionObserver((es, io) => { if (es[0].isIntersecting) { heat(0.5); io.disconnect(); } }, { threshold: 0.2 }).observe(root);
+})();
+</script>
 <script is:inline>
 // LeaderLine: dashed 1px ink line with an open-circle end, from a MarginNote to
 // the element it annotates. Positioned from geometry, recalculated on resize.
@@ -2253,6 +2433,61 @@ table.dense, .md-table table { width: 100%; border-collapse: collapse; font-size
 .cite-copy:hover { background: var(--accent-wash); }
 .cite-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cite-foot { margin: var(--s-2) 0 0; font-size: 0.85rem; }
+/* ---- dataset graph */
+.dsx-graph-sec { padding-block: var(--s-6); row-gap: var(--s-4); }
+.dsx-graph-head { grid-column: 1 / 9; display: grid; gap: var(--s-2); }
+.dsx-graph {
+  grid-column: 1 / -1; position: relative; border: 1px solid var(--g-major); overflow: hidden;
+  /* Engineer's blueprint: deep cyanotype blue with white rules, a fine
+     20px grid and a heavier line every 100px. */
+  --g-bg: #3A5F94; --g-minor: rgba(255, 255, 255, 0.09); --g-major: rgba(255, 255, 255, 0.22);
+  --g-line: rgba(255, 255, 255, 0.36); --g-topic: #F4F7FC; --g-hub: #C9D6EC; --g-text: #F4F7FC;
+  background-color: var(--g-bg);
+  background-image:
+    linear-gradient(var(--g-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--g-major) 1px, transparent 1px),
+    linear-gradient(var(--g-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--g-minor) 1px, transparent 1px);
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+  background-position: -1px -1px;
+  color: var(--g-text);
+}
+html[data-theme="dark"] .dsx-graph { --g-bg: #2B4670; --g-major: rgba(255, 255, 255, 0.2); --g-minor: rgba(255, 255, 255, 0.07); }
+.dsx-graph-svg { display: block; width: 100%; height: auto; touch-action: none; user-select: none; cursor: grab; }
+.dsx-graph-svg.is-dragging { cursor: grabbing; }
+.dsx-graph-keys { position: absolute; top: 12px; left: 12px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 0; padding: 8px 12px; border: 1px solid var(--g-major); background: var(--g-bg); }
+.dsx-graph-keys label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.dsx-graph-keys input { accent-color: #FFFFFF; margin: 0; }
+.gk { display: inline-block; width: 18px; height: 0; border-top: 1.5px solid var(--g-hub); }
+.gk--topic { border-top: 2px solid var(--g-topic); }
+.gk--src { border-top-style: dashed; }
+.dsx-graph-reset { font: inherit; background: none; border: 0; padding: 0; color: var(--g-text); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.g-link { stroke: var(--g-line); stroke-width: 1; fill: none; transition: opacity 200ms ease, stroke 200ms ease; }
+.g-link--src { stroke-dasharray: 3 4; }
+.g-link--topic { stroke: var(--g-topic); stroke-width: 1.8; opacity: 0.9; }
+.g-node { cursor: pointer; transition: opacity 200ms ease; }
+.g-node circle { transition: r 200ms ease, stroke-width 200ms ease; }
+.g-node--ds circle { fill: var(--tone); stroke: rgba(255, 255, 255, 0.85); stroke-width: 2; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--tone) 55%, transparent)); }
+.g-node--ds .g-halo { fill: var(--tone); opacity: 0; stroke: none; transition: opacity 200ms ease; }
+.g-node--hub { cursor: grab; }
+.g-node--hub circle { fill: var(--g-bg); stroke: var(--g-hub); stroke-width: 1.5; }
+.g-node--theme circle { stroke: var(--g-topic); stroke-width: 2; }
+.g-node text { font-family: var(--f-mono); font-size: 12px; fill: var(--g-text); paint-order: stroke; stroke: var(--g-bg); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.g-node--hub text { font-size: 10.5px; fill: var(--g-hub); letter-spacing: 0.04em; text-transform: uppercase; }
+.g-node--theme text { font-weight: 500; fill: var(--g-text); }
+.dsx-graph.is-focus .g-node, .dsx-graph.is-focus .g-link { opacity: 0.12; }
+.dsx-graph.is-focus .g-node.is-lit, .dsx-graph.is-focus .g-link.is-lit { opacity: 1; }
+.g-node.is-lit .g-halo, .g-node:focus-visible .g-halo { opacity: 0.35; }
+.g-node:focus { outline: none; }
+.g-node:focus-visible circle:not(.g-halo) { stroke: #FFE58A; stroke-width: 3; }
+/* Soft, warm-and-cool tones picked to sit on the blueprint blue: coral, butter,
+   mint and aqua, each light enough to read against it. */
+.g-tone-clm { --tone: #F4A38A; } .g-tone-eng { --tone: #F6D47E; } .g-tone-mac { --tone: #93D8B8; } .g-tone-eqt { --tone: #8ED3EC; } .g-tone-com { --tone: #CDB8F0; }
+.g-node--theme[class*='g-tone-'] circle { stroke: var(--tone); stroke-width: 2.5; fill: color-mix(in srgb, var(--tone) 22%, var(--g-bg)); }
+.dsx-graph-tip { position: absolute; z-index: 3; max-width: 280px; margin: 0; padding: 8px 10px; background: #FFFFFF; color: #0E2A5C; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); pointer-events: none; transform: translate(-50%, calc(-100% - 14px)); line-height: 1.4; }
+.dsx-graph-tip[hidden] { display: none; }
+.dsx-graph-tip b { display: block; font-weight: 500; }
+@media (max-width: 700px) { .dsx-graph-head { grid-column: 1 / -1; } .dsx-graph { overflow-x: auto; } .dsx-graph-keys { position: sticky; left: 0; border-width: 0 0 1px 0; } .dsx-graph-svg { min-width: 860px; } }
 .dsx-cite-sec { padding-block: var(--s-6) var(--s-8); row-gap: var(--s-4); }
 .dsx-cite-head { grid-column: 1 / 9; display: grid; gap: var(--s-2); }
 .dsx-cite-sec .cite { grid-column: 1 / -1; }
