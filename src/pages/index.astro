@@ -243,6 +243,26 @@ const darkEnd = (k: ScaleKind) => STOPS[k][4];
 const gen = rough.generator();
 /** Round every number in a path string to 1 decimal (keeps inline SVG small). */
 const tidy = (d: string, dec = 1) => d.replace(/-?\d+\.\d+/g, (n) => (Math.round(+n * 10 ** dec) / 10 ** dec).toString());
+/** The Bharatnomy "M", hand-drawn: the white shape from the logo, as four
+ *  60-degree pieces on a grid (x step U, row height U*sqrt(3)). */
+const markSketch = (() => {
+    const U = 60, H = U * Math.sqrt(3), PAD = 12;
+    const pieces: [number, number][][] = [
+        [[3, 0], [5, 0], [6, 1], [5, 2], [4, 1], [2, 3], [1, 4], [0, 3]],
+        [[2, 3], [4, 3], [5, 2], [6, 3], [5, 4], [3, 4]],
+        [[7, 0], [9, 0], [10, 1], [9, 2], [8, 1], [6, 3], [5, 2]],
+        [[6, 3], [8, 3], [9, 2], [10, 3], [9, 4], [7, 4]],
+    ];
+    const outline: string[] = [], hatch: string[] = [];
+    pieces.forEach((pc, i) => {
+        const pts = pc.map(([a, b]) => [PAD + a * U, PAD + b * H] as [number, number]);
+        for (const pi of gen.toPaths(gen.polygon(pts, { roughness: 1.1, bowing: 0.8, stroke: '#000', strokeWidth: 2.2, seed: 41 + i * 13 })))
+            outline.push(tidy(pi.d));
+        for (const pi of gen.toPaths(gen.polygon(pts, { stroke: 'none', fill: '#000', fillStyle: 'hachure', hachureAngle: -41, hachureGap: 6, fillWeight: 1.2, roughness: 0.9, seed: 97 + i * 13 })))
+            if (pi.stroke !== 'none' || pi.fill === 'none') hatch.push(tidy(pi.d));
+    });
+    return { w: Math.round(PAD * 2 + 10 * U), h: Math.round(PAD * 2 + 4 * H), outline: outline.join(' '), hatch: hatch.join(' ') };
+})();
 interface Frame {
     width: number;
     height: number;
@@ -1169,6 +1189,10 @@ const censusSlots: Record<string, string> = {
 
   <!-- ============================================================ TITLE PAGE -->
   <section class="ch ch-title" data-chapter="TITLE PAGE" aria-labelledby="h-title">
+    <svg class="title-mark" viewBox={`0 0 ${markSketch.w} ${markSketch.h}`} aria-hidden="true" focusable="false">
+      <path class="title-mark-hatch" d={markSketch.hatch} />
+      <path class="title-mark-line" d={markSketch.outline} />
+    </svg>
     <div class="sheet title-sheet">
       <h1 id="h-title" class="display title-h1">
         <span class="ln">India's economy,</span>
@@ -3451,8 +3475,28 @@ body.home .btn--primary { color: var(--paper); }
 
 
 /* ------------------------------------------------------------ title page */
-.ch-title { padding-top: var(--s-8); padding-bottom: 0; }
-.title-sheet { row-gap: var(--s-6); padding-bottom: var(--s-9); }
+.ch-title { padding-top: var(--s-8); padding-bottom: 0; overflow-x: clip; --mark-ink: #2346C7; }
+/* The Bharatnomy "M", hand-drawn and large, with 15% of it running off the
+   right edge. It sits behind the headline, so it stays light. */
+.title-mark {
+  position: absolute; z-index: 0; pointer-events: none;
+  right: 0; top: 45%;
+  width: clamp(560px, 64vw, 1120px); height: auto;
+  transform: translate(15%, -50%);
+  overflow: visible;
+}
+.title-mark path { fill: none; stroke: var(--mark-ink); stroke-linecap: round; stroke-linejoin: round; }
+.title-mark-line { opacity: 0.6; stroke-width: 2.6; }
+.title-mark-hatch { opacity: 0.22; stroke-width: 1.3; }
+html[data-theme="dark"] .ch-title { --mark-ink: #8FA8F0; }
+.js .title-mark { animation: mark-in 1000ms var(--ease-out) 120ms both; }
+@keyframes mark-in {
+  from { opacity: 0; transform: translate(21%, -50%); }
+  to   { opacity: 1; transform: translate(15%, -50%); }
+}
+@media (prefers-reduced-motion: reduce) { .js .title-mark { animation: none; } }
+.ch-title .title-sheet, .ch-title .ticker { position: relative; z-index: 1; }
+.title-sheet { row-gap: var(--s-6); padding-bottom: var(--s-9); max-width: 1640px; padding-left: clamp(16px, 2vw, 40px); }
 .title-h1 {
   grid-column: 1 / -1; grid-row: 1;
   font-size: clamp(3.4rem, 9.6vw, 11rem); line-height: 0.86; font-weight: 900; letter-spacing: -0.02em;
@@ -3629,6 +3673,7 @@ body.home .btn--primary { color: var(--paper); }
   .one-text, .one-map, .four-title, .four-why, .four-lines,
   .five-head, .five-who, .five-note, .five-more, .colophon-line, .colophon-sub { grid-column: 1 / -1; grid-row: auto; }
   .title-h1 { font-size: clamp(3rem, 15vw, 5rem); }
+  .title-mark { display: none; }
   .one-text { padding-top: 0; }
   .one-map { margin-top: var(--s-6); }
   .census-wrap { padding-top: calc(var(--s-5) + 50px); }
