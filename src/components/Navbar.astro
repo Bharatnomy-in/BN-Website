@@ -38,7 +38,11 @@ const isCurrent = (href: string) => {
 <header class="strip">
   <div class="lens-band" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
   <div class="strip-row">
-    <a href={u('/')} class="strip-mark" aria-label="Bharatnomy, home">BHARATNOMY</a>
+    <a href={u('/')} class="strip-mark" aria-label="Bharatnomy, home">
+      <svg class="strip-logo" viewBox="0 0 720 720" width="22" height="22" aria-hidden="true" focusable="false">
+        <circle cx="360" cy="360" r="360" fill="#426BD0" />
+        <path fill="#fff" d="M259.5 207 346.5 207 390 282.3 346.5 357.7 303 282.3 216 433 172.5 508.4 129 433ZM216 433 303 433 346.5 357.7 390 433 346.5 508.4 259.5 508.4ZM433.5 207 520.5 207 564 282.3 520.5 357.7 477 282.3 390 433 346.5 357.7ZM390 433 477 433 520.5 357.7 564 433 520.5 508.4 433.5 508.4Z" />
+      </svg>BHARATNOMY</a>
     <nav class="strip-nav" aria-label="Main">
       <ul>
         {navItems.map((item) => (
@@ -122,7 +126,19 @@ html[data-theme="dark"] .back { --ink: #F2F3EF; --ink-soft: #D5DCE6; --ink-faint
 }
 .strip-row > * { display: flex; align-items: center; padding: 0 var(--s-4); border-left: var(--hair-soft); }
 .strip-row > :first-child { border-left: 0; padding-left: 0; }
-.strip-mark { font-family: var(--f-display); font-weight: 800; font-size: 1.2rem; letter-spacing: 0.04em; color: var(--ink); text-decoration: none; }
+.strip-mark { font-family: var(--f-display); font-weight: 800; font-size: 1.2rem; letter-spacing: 0.04em; color: var(--ink); text-decoration: none; gap: 9px; transition: color 160ms ease; }
+.strip-mark:hover { color: var(--brand); }
+.strip-logo { flex: none; display: block; transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1); }
+.strip-mark:hover .strip-logo { transform: rotate(-8deg) scale(1.06); }
+
+/* ------------------------------------------- brand blue, shared by every page
+   A calm slate blue (the Equity lens colour) carries the actions: primary
+   buttons, selected tabs, panel edges. Links keep the brighter --accent.
+   "html body" outranks each page's own copy of these rules. */
+:root { --brand: #3F5F8F; --brand-deep: #2E4970; --brand-ink: #F7F8F4; }
+html[data-theme="dark"] { --brand: #7C97C4; --brand-deep: #9BB2D8; --brand-ink: #111418; }
+html body .btn--primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+html body .btn--primary:hover, html body .btn--primary.is-hover { background: var(--brand-deep); border-color: var(--brand-deep); box-shadow: 2px 2px 0 var(--ink); }
 .strip-nav ul { display: flex; gap: 0; list-style: none; margin: 0; padding: 0; }
 .strip-nav li + li::before { content: "|"; color: var(--ink-faint); padding: 0 var(--s-2); font-family: var(--f-mono); font-size: var(--t-label); }
 .strip-nav a { position: relative; color: var(--ink); text-decoration: none; padding: 12px 2px; }
